@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.py[cod]
+vynexa_data/
+config.json
+orders.json
+users.json
+referrals.json
+admin_id.txt
+vynexa_group_verified.json
+*.session
+*.sqlite3
+*.db
