@@ -315,6 +315,11 @@ async def referral_admin_panel(update, context):
 
 async def referral_callback(update, context):
     q=update.callback_query; d=q.data; uid=q.from_user.id
+    if d.startswith('m:'):
+        label = _SHORT_MENU_CALLBACKS.get(d[2:])
+        if label is None:
+            return await q.answer('این دکمه منقضی شده؛ منو را دوباره باز کن.', show_alert=True)
+        d = 'menu:' + label
     if d=='ref_refresh':
         await q.answer('آمار به‌روزرسانی شد ✅')
         successful,pending=referral_stats(uid)
@@ -469,6 +474,8 @@ def _button_style(label):
     return None
 
 
+_SHORT_MENU_CALLBACKS = {}
+
 def kb(rows):
     # سرعت: config فقط یک‌بار برای کل منو خوانده می‌شود، نه برای تک‌تک دکمه‌ها.
     keyboard = []
@@ -483,7 +490,12 @@ def kb(rows):
         for label in row:
             label = str(label)
             style = _button_style(label)
-            kwargs = {'callback_data': 'menu:' + label}
+            callback_data = 'menu:' + label
+            if len(callback_data.encode('utf-8')) > 64:
+                token = __import__('hashlib').sha1(label.encode('utf-8')).hexdigest()[:12]
+                _SHORT_MENU_CALLBACKS[token] = label
+                callback_data = 'm:' + token
+            kwargs = {'callback_data': callback_data}
             if style:
                 kwargs['style'] = style
             shown_label = label
@@ -1884,7 +1896,10 @@ async def tonpays_create_invoice(update, context, order, kind):
     # TonPays requires a fresh merchant order_id for every invoice attempt.
     # Keep our internal order ID unchanged and store the unique gateway ID separately.
     gateway_order_id = "tp-" + secrets.token_hex(8)
-    payload = {"amount": amount, "order_id": gateway_order_id, "buyer_chat_id": uid}
+    payload = {"amount": amount, "order_id": gateway_order_id}
+    merchant_chat_id = str(os.environ.get('TONPAYS_MERCHANT_TELEGRAM_ID', '')).strip()
+    if not merchant_chat_id or str(uid) != merchant_chat_id:
+        payload['buyer_chat_id'] = uid
     data, err = await tonpays_request("POST", "/api/v1/invoices/create", payload)
     if err:
         return await update.effective_message.reply_text("❌ " + err)
@@ -3869,7 +3884,7 @@ async def text_router(update, context):
                 base = gb * rate
                 if gb in allowed and button_price == base:
                     return await create_v2ray_order(update, context, f'{gb}GB', base, duration)
-        if context.user_data.get('v2ray_wait_custom'):
+        if context.user_data.get('v2ray_wait_custom') and t != '🔙 برگشت':
             try:
                 gb = int(fa_to_en_digits(t).replace(',','').replace('٬','').replace('GB','').replace('gb','').strip())
             except Exception:
@@ -4279,7 +4294,9 @@ async def callback(update, context):
         if len(action) >= 3 and action[1] == 'step':
             try: step = int(action[2])
             except Exception: step = 5
-            new_gb = max(5, min(1000, current + step))
+            tier = context.user_data.get('v2ray_tier', 'economic')
+            minimum = 1 if tier == 'national' else 5
+            new_gb = max(minimum, min(1200, current + step))
             await q.answer()
             return await show_v2ray_custom_timeline(q.message, context, new_gb, edit=True)
         if len(action) >= 2 and action[1] == 'back':
@@ -4287,8 +4304,11 @@ async def callback(update, context):
             context.user_data.pop('v2ray_custom_gb', None)
             tier = context.user_data.get('v2ray_tier', 'economic')
             duration = context.user_data.get('v2ray_duration', '1 ماهه')
+            context.user_data.pop('v2ray_wait_custom', None)
             if tier in ('economic', 'normal'):
-                if duration in ('1 ماهه', '2 ماهه'):
+                if duration == '1 ماهه':
+                    volumes = []
+                elif duration == '2 ماهه':
                     volumes = [100, 200, 400, 600, 800, 1000] if tier == 'economic' else [20, 40, 100, 200, 300]
                 else:
                     volumes = [150, 300, 600, 900, 1200] if tier == 'economic' else [30, 60, 150, 450]
@@ -4300,8 +4320,9 @@ async def callback(update, context):
                 return await q.edit_message_text(f'📦 پلن‌های {"اقتصادی" if tier == "economic" else "عادی"} — {duration}:', reply_markup=kb(rows))
             return await q.edit_message_text('مدت سرویس را انتخاب کن:', reply_markup=kb([['📅 1 ماهه'], ['📅 2 ماهه'], ['📅 3 ماهه'], ['🔙 برگشت']]))
         if len(action) >= 2 and action[1] == 'confirm':
-            gb = max(5, min(1000, current))
             tier = context.user_data.get('v2ray_tier', 'economic')
+            minimum = 1 if tier == 'national' else 5
+            gb = max(minimum, min(1200, current))
             duration = context.user_data.get('v2ray_duration', '1 ماهه')
             base_price = v2ray_custom_price(tier, gb, duration)
             final_price = int(round(base_price if tier in ('economic', 'normal', 'national') else base_price * PRICE_MARKUP))
