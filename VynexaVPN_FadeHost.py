@@ -942,7 +942,7 @@ async def v2ray_menu(update, context):
     context.user_data['v2ray_flow'] = True
     return await update.message.reply_text(
         '🌐 V2Ray\n\nنوع سرویس را انتخاب کن:',
-        reply_markup=kb([['💚 اقتصادی-حجمی'], ['🔵 عادی-حجمی'], ['🟣 پرو- نامحدود حجم'], ['🧪 تست رایگان'], ['🔙 برگشت']])
+        reply_markup=kb([['💚 اقتصادی-حجمی'], ['🔵 عادی-حجمی'], ['🇮🇷 ویژه ملی'], ['🟣 پرو- نامحدود حجم'], ['🧪 تست رایگان'], ['🔙 برگشت']])
     )
 
 
@@ -951,9 +951,12 @@ async def v2ray_duration_menu(update, context, tier):
     context.user_data['v2ray_tier'] = tier
     if tier == 'pro':
         return await update.message.reply_text('🟣 پرو — نامحدود حجم\n\nتعداد کاربران را انتخاب کن:', reply_markup=kb([['👤 تک کاربر'], ['👥 چند کاربر'], ['🔙 برگشت']]))
+    if tier == 'national':
+        context.user_data['v2ray_duration'] = '1 ماهه'
+        return await update.message.reply_text('🇮🇷 V2Ray ویژه ملی — یک‌ماهه\n\nانتخاب کن:', reply_markup=kb([['📦 خرید حجم دلخواه (گیگی ۳۰۰هزار تومان)'], ['🧪 دریافت تست (100MB-۳۰هزار تومان)'], ['🔙 برگشت']]))
     return await update.message.reply_text(
         f'🔹 {"اقتصادی" if tier == "economic" else "عادی"}\n\nمدت سرویس را انتخاب کن:',
-        reply_markup=kb([['📅 1 ماهه'], ['📅 3 ماهه'], ['🔙 برگشت']])
+        reply_markup=kb([['📅 1 ماهه'], ['📅 2 ماهه'], ['📅 3 ماهه'], ['🔙 برگشت']])
     )
 
 
@@ -961,41 +964,51 @@ async def v2ray_volume_menu(update, context):
     tier = context.user_data.get('v2ray_tier')
     duration = context.user_data.get('v2ray_duration')
     data = v2ray_item().get(tier, {})
-    if duration == '1 ماهه' and tier in ('economic', 'normal'):
-        vals = {'economic': [45000,50000,55000,60000,65000,70000], 'normal': [75000,84000,93000,102000,111000,120000]}[tier]
-        rows = [[f'📦 {gb}GB — {shown_price(price)}'] for gb, price in zip(range(5,11), vals)]
-        rows.append(['📦 حجم دلخواه (۵GB به بالا)'])
+    if tier == 'national':
+        return await update.message.reply_text('🇮🇷 V2Ray ویژه ملی — یک‌ماهه\n\nانتخاب کن:', reply_markup=kb([['📦 خرید حجم دلخواه (گیگی ۳۰۰هزار تومان)'], ['🧪 دریافت تست (100MB-۳۰هزار تومان)'], ['🔙 برگشت']]))
+    if tier in ('economic', 'normal'):
+        if duration in ('1 ماهه', '2 ماهه'):
+            volumes = [100, 200, 400, 600, 800, 1000] if tier == 'economic' else [20, 40, 100, 200, 300]
+        elif duration == '3 ماهه':
+            volumes = [150, 300, 600, 900, 1200] if tier == 'economic' else [30, 60, 150, 450]
+        else:
+            volumes = []
+        rate = 6000 if tier == 'economic' else 10000
+        rows = [[f'📦 {gb}GB — {money(gb * rate)}'] for gb in volumes]
+        rows.append(['📦 حجم دلخواه'])
         rows.append(['🔙 برگشت'])
-        return await update.message.reply_text('📦 حجم سرویس را انتخاب کن:', reply_markup=kb(rows))
-    if duration == '3 ماهه':
-        rows=[]
-        for volume, price in data.get('3 ماهه', {}).items():
-            rows.append([f'📦 {volume} — {shown_price(price)}'])
-        rows.append(['🔙 برگشت'])
-        return await update.message.reply_text('📦 حجم سرویس را انتخاب کن:', reply_markup=kb(rows))
+        return await update.message.reply_text(f'📦 پلن‌های {"اقتصادی" if tier == "economic" else "عادی"} — {duration}:', reply_markup=kb(rows))
     if tier == 'pro':
         return await create_v2ray_order(update, context, 'نامحدود', 220000, '1 ماهه')
+    rows=[]
+    for volume, price in data.get(duration, {}).items():
+        rows.append([f'📦 {volume} — {shown_price(price)}'])
+    rows.append(['🔙 برگشت'])
+    return await update.message.reply_text('📦 حجم سرویس را انتخاب کن:', reply_markup=kb(rows))
 
-
-def v2ray_custom_price(tier, gb):
-    if tier == 'economic':
-        base = 45000 + (gb - 5) * 5000 if gb <= 10 else gb * 6000
-    else:
-        base = 75000 + (gb - 5) * 9000 if gb <= 10 else gb * 10000
-    return int(round(base * PRICE_MARKUP))
+def v2ray_custom_price(tier, gb, duration=None):
+    duration = duration or '1 ماهه'
+    if tier == 'national':
+        return int(gb) * 300000
+    rate = 6000 if tier == 'economic' else 10000
+    return int(gb) * rate
 
 
 async def show_v2ray_custom_timeline(message, context, gb, edit=False):
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    gb = max(5, min(1000, int(gb)))
-    context.user_data['v2ray_custom_gb'] = gb
     tier = context.user_data.get('v2ray_tier', 'economic')
-    price = v2ray_custom_price(tier, gb)
+    minimum = 1 if tier == 'national' else 1
+    gb = max(minimum, min(1200, int(gb)))
+    context.user_data['v2ray_custom_gb'] = gb
+    duration = context.user_data.get('v2ray_duration', '1 ماهه')
+    price = v2ray_custom_price(tier, gb, duration)
+    displayed_price = int(round(price if tier in ('economic', 'normal', 'national') else price * PRICE_MARKUP))
+    rate = 300000 if tier == 'national' else (6000 if tier == 'economic' else 10000)
     text = (
         '📦 انتخاب حجم دلخواه VynexaVPN\n\n'
         f'💾 حجم انتخابی: {gb:,} گیگابایت\n'
-        f'💰 قیمت: {money(price)}\n\n'
-        'با دکمه‌ها حجم را کم‌وزیاد کن؛ حداقل ۵ و حداکثر ۱۰۰۰ گیگابایت.'
+        f'💰 قیمت: {money(displayed_price)}\n\n'
+        f'با دکمه‌ها حجم را کم‌وزیاد کن؛ حداقل {minimum} و حداکثر ۱۲۰۰ گیگابایت. قیمت پایه هر گیگ: {money(rate)}.'
     )
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton('−100 GB', callback_data='v2custom:step:-100'), InlineKeyboardButton('−25 GB', callback_data='v2custom:step:-25'), InlineKeyboardButton('−5 GB', callback_data='v2custom:step:-5')],
@@ -1014,12 +1027,15 @@ async def show_v2ray_custom_timeline(message, context, gb, edit=False):
 async def create_v2ray_order(update, context, volume, price, duration):
     uid = update.effective_user.id
     tier = context.user_data.get('v2ray_tier', '')
-    labels = {'economic':'اقتصادی-حجمی','normal':'عادی-حجمی','pro':'پرو- نامحدود حجم'}
-    backend_labels = {'economic':'اقتصادی','normal':'عادی','pro':'پرو'}
+    labels = {'economic':'اقتصادی-حجمی','normal':'عادی-حجمی','pro':'پرو- نامحدود حجم','national':'ویژه ملی'}
+    backend_labels = {'economic':'اقتصادی','normal':'عادی','pro':'پرو','national':'پرو'}
+    direct_price = tier in ('economic', 'normal', 'national')
     o = {
         'id': make_order_id(), 'user_id': uid, 'service': 'V2Ray',
         'v2ray_tier': backend_labels.get(tier, tier), 'v2ray_tier_display': labels.get(tier, tier), 'volume': str(volume),
         'duration': duration, 'speed': '-', 'price': int(price),
+        'price_markup_applied': direct_price,
+        'price_markup_rate': 1.0 if direct_price else PRICE_MARKUP,
         'status': 'draft', 'created_at': datetime.now().isoformat()
     }
     context.user_data['order'] = o
@@ -1589,7 +1605,7 @@ async def _return_to_payment_menu(update, context, order, notice):
 
     text = (str(notice).strip() + "\n\n" if notice else "") + order_summary(order) + "\n\nروش پرداخت را انتخاب کن:"
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 کارت به کارت", callback_data="menu:💳 کارت به کارت")],
+        [InlineKeyboardButton("💳 کارت به کارت (کمی با تأخیر)", callback_data="menu:💳 کارت به کارت")],
         [InlineKeyboardButton("💰 استفاده از کیف پول", callback_data="menu:💰 استفاده از کیف پول")],
         [InlineKeyboardButton("🎟 کد تخفیف دارم", callback_data="menu:🎟 کد تخفیف دارم")],
         [InlineKeyboardButton("🔙 برگشت", callback_data="menu:🔙 برگشت")],
@@ -1857,8 +1873,15 @@ async def tonpays_create_invoice(update, context, order, kind):
         amount = max(0, amount - int(order.get("wallet_paid", 0) or 0))
     if amount <= 0:
         return await update.effective_message.reply_text("✅ مبلغ قابل پرداختی باقی نمانده است.")
-    oid = str(order.get("id") or make_order_id())[:20]
-    payload = {"amount": amount, "order_id": oid, "buyer_chat_id": uid}
+    if amount < 20000:
+        return await update.effective_message.reply_text(
+            "❌ حداقل مبلغ فاکتور TonPays برابر ۲۰٬۰۰۰ تومان است.\n"
+            "لطفاً مبلغ شارژ را حداقل ۲۰٬۰۰۰ تومان انتخاب کن یا برای این سفارش از کارت‌به‌کارت استفاده کن."
+        )
+    # TonPays requires a fresh merchant order_id for every invoice attempt.
+    # Keep our internal order ID unchanged and store the unique gateway ID separately.
+    gateway_order_id = "tp-" + secrets.token_hex(9)
+    payload = {"amount": amount, "order_id": gateway_order_id, "buyer_chat_id": uid}
     data, err = await tonpays_request("POST", "/api/v1/invoices/create", payload)
     if err:
         return await update.effective_message.reply_text("❌ " + err)
@@ -1869,6 +1892,7 @@ async def tonpays_create_invoice(update, context, order, kind):
     orders = load_orders()
     stored = orders.get(str(order.get("id")), order)
     stored["tonpays_invoice_id"] = invoice_id
+    stored["tonpays_order_id"] = gateway_order_id
     stored["tonpays_amount"] = amount
     stored["tonpays_kind"] = kind
     stored["tonpays_status"] = str(data.get("status") or "pending")
@@ -1941,11 +1965,55 @@ async def tonpays_check_callback(update, context, order_id):
         if linked:
             await q.message.reply_text("برای پرداخت باقی‌مانده سفارش، به منوی خرید برگرد و از کیف پول استفاده کن.")
         return
-    # پرداخت سرویس قطعی است؛ برای ادامه روال فعلی ساخت سرویس، مدیر مطلع می‌شود.
+    # Paid service orders should follow the same automatic V2Route delivery flow as card-approved orders.
     o["payment"] = "tonpays"
     orders[str(order_id)] = o
     save_orders(orders)
-    await q.message.reply_text("✅ پرداخت تأیید شد. سفارش برای آماده‌سازی سرویس ثبت شد.")
+    is_auto_v2 = (
+        str(o.get("service", "")).lower() == "v2ray" and
+        str(o.get("duration", "")) in ("1 ماهه", "2 ماهه", "3 ماهه") and
+        str(o.get("v2ray_tier", "")) in ("اقتصادی", "عادی", "پرو")
+    )
+    if is_auto_v2:
+        await q.message.reply_text("✅ پرداخت TonPays تأیید شد.\n📦 در حال ساخت خودکار کانفیگ از پنل...")
+        sub_url, create_err = await v2route_create_service(o)
+        if sub_url:
+            o["status"] = "delivered"
+            o["subscription_url"] = sub_url
+            o["delivered_at"] = datetime.now().isoformat()
+            orders[str(order_id)] = o
+            save_orders(orders)
+            success_text = (
+                "🎉 پرداخت تأیید شد و کانفیگ شما خودکار ساخته شد!\n\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"🌐 سرویس: {o.get('service', 'V2Ray')}\n"
+                f"📦 نوع: {o.get('v2ray_tier', '-')}\n"
+                f"📊 حجم: {o.get('volume', '-')}\n"
+                f"⏳ مدت: {o.get('duration', '-')}\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                "🔗 لینک اتصال شما:\n" + str(sub_url) +
+                "\n\n⚠️ این لینک اختصاصی است؛ آن را در اختیار دیگران قرار نده."
+            )
+            buttons = InlineKeyboardMarkup([
+                [InlineKeyboardButton('⭐ آموزش استفاده از V2Ray (پیشنهادی)', url='https://sv5.downloadyarbot.ir/IDM/vynexa-vpn-guide-1.html')],
+                [InlineKeyboardButton('⚡ آموزش V2Box / Happ / V2RayTun', url='https://sv1.downloadyarbot.ir/IDM/vynexa-vpn-guides-all.html')],
+                [InlineKeyboardButton('🍎 آموزش استفاده در آیفون', url='https://sv5.downloadyarbot.ir/IDM/vynexa-vpn-iphone-guides.html')]
+            ])
+            await q.message.reply_text(success_text, reply_markup=buttons)
+            await record_successful_referral(context, o)
+            await send_vynexa_v2route_qr(context, uid, o.get("v2route_qr"))
+            return
+        o["status"] = "paid_api_failed"
+        o["api_error"] = create_err or "unknown error"
+        orders[str(order_id)] = o
+        save_orders(orders)
+        await q.message.reply_text("⚠️ پرداخت تأیید شد، اما پنل در ساخت کانفیگ خطا داد. مدیر مطلع شد و سفارش گم نمی‌شود.")
+        try:
+            await context.bot.send_message(admin_id(), "❌ خطای ساخت خودکار کانفیگ پس از پرداخت TonPays\n🆔 سفارش: " + str(order_id) + "\n" + str(create_err))
+        except Exception:
+            pass
+        return
+    await q.message.reply_text("✅ پرداخت TonPays تأیید شد. این نوع سرویس فعلاً به آماده‌سازی مدیر نیاز دارد؛ مدیر مطلع شد.")
     await notify_admin_payment(context, o, None)
 
 
@@ -1955,8 +2023,8 @@ async def payment_menu(update, context):
     await update.message.reply_text(
         order_summary(o) + '\n\nروش پرداخت را انتخاب کن:',
         reply_markup=kb([
-            ['💳 کارت به کارت'],
-            ['💎 پرداخت با TonPays'],
+            ['💳 کارت به کارت (کمی با تأخیر)'],
+            ['💎 پرداخت با TonPays (تأیید آنی)'],
             ['💰 استفاده از کیف پول'],
             ['🎟 کد تخفیف دارم'],
             ['🔙 برگشت']
@@ -2441,11 +2509,16 @@ async def v2route_create_service(o):
     import httpx
     import re
 
-    tier_map = {"اقتصادی": "economy", "عادی": "standard"}
+    # Map bot tiers to the panel tiers. The national plan is provisioned
+    # under the panel's existing "Pro" tier, as requested by the owner.
+    tier_map = {"اقتصادی": "economy", "عادی": "standard", "پرو": "pro"}
     tier = tier_map.get(str(o.get("v2ray_tier", "")))
 
-    if not tier or str(o.get("duration", "")) != "1 ماهه":
-        return None, "این سفارش برای ساخت خودکار V2Route نیست."
+    duration_text = str(o.get("duration", "1 ماهه"))
+    duration_map = {"1 ماهه": 1, "2 ماهه": 2, "3 ماهه": 3}
+    duration_months = duration_map.get(duration_text)
+    if not tier or duration_months is None:
+        return None, "نوع یا مدت سفارش برای ساخت خودکار V2Route معتبر نیست."
 
     if V2ROUTE_TOKEN == "PASTE_V2ROUTE_TOKEN_HERE":
         return None, "V2Route Token وارد نشده است."
@@ -2459,6 +2532,7 @@ async def v2route_create_service(o):
         "name": "Vynexa-" + str(o["id"]),
         "tier": tier,
         "gb": (int(float(m.group(1))) if float(m.group(1)).is_integer() else float(m.group(1))),
+        "duration_months": duration_months,
     }
 
     headers = {
@@ -2623,8 +2697,8 @@ async def admin_confirm(update, context, ok):
 
     is_auto_v2 = (
         str(o.get('service', '')).lower() == 'v2ray' and
-        str(o.get('duration', '')) in ('1 ماهه', '3 ماهه') and
-        str(o.get('v2ray_tier', '')) in ('اقتصادی', 'عادی')
+        str(o.get('duration', '')) in ('1 ماهه', '2 ماهه', '3 ماهه') and
+        str(o.get('v2ray_tier', '')) in ('اقتصادی', 'عادی', 'پرو')
     )
     if is_auto_v2:
         await context.bot.send_message(uid, '⏳ پرداخت تأیید شد.\n📦 در حال ساخت سرویس شما...')
@@ -3744,7 +3818,7 @@ async def text_router(update, context):
                 context.user_data['order']=o
                 return await show_invoice_then_identity(update, context)
     if context.user_data.get('v2ray_flow'):
-        tier_map = {'اقتصادی':'economic', 'اقتصادی-حجمی':'economic', 'عادی':'normal', 'عادی-حجمی':'normal', 'پرو':'pro', 'پرو- نامحدود حجم':'pro'}
+        tier_map = {'اقتصادی':'economic', 'اقتصادی-حجمی':'economic', 'عادی':'normal', 'عادی-حجمی':'normal', 'پرو':'pro', 'پرو- نامحدود حجم':'pro', 'ویژه ملی':'national'}
         if t in tier_map: return await v2ray_duration_menu(update, context, tier_map[t])
         if t == 'تک کاربر' and context.user_data.get('v2ray_tier') == 'pro':
             context.user_data['pro_user_mode'] = 'single'
@@ -3756,11 +3830,21 @@ async def text_router(update, context):
         if t in ('1 ماهه', '2 ماهه', '3 ماهه') and context.user_data.get('v2ray_tier') == 'pro' and context.user_data.get('pro_user_mode') == 'single':
             prices = {'1 ماهه': 100000, '2 ماهه': 200000, '3 ماهه': 300000}
             return await create_v2ray_order(update, context, 'نامحدود حجم — تک کاربر', prices[t], t)
+        if t in ('خرید حجم دلخواه (گیگی ۳۰۰هزار تومان)', '📦 خرید حجم دلخواه (گیگی ۳۰۰هزار تومان)') and context.user_data.get('v2ray_tier') == 'national':
+            context.user_data['v2ray_wait_custom'] = True
+            context.user_data['v2ray_custom_gb'] = 1
+            return await show_v2ray_custom_timeline(update.message, context, 1)
+        if t in ('دریافت تست (100MB-۳۰هزار تومان)', '🧪 دریافت تست (100MB-۳۰هزار تومان)') and context.user_data.get('v2ray_tier') == 'national':
+            return await create_v2ray_order(update, context, '0.1GB (تست)', 30000, '1 ماهه')
+        if t in ('حجم دلخواه', '📦 حجم دلخواه') and context.user_data.get('v2ray_tier') in ('economic', 'normal'):
+            context.user_data['v2ray_custom_gb'] = 1
+            context.user_data['v2ray_wait_custom'] = True
+            return await show_v2ray_custom_timeline(update.message, context, 1)
         if t == 'تست رایگان': return await v2ray_test_menu(update, context)
         if t == 'تست اقتصادی': return await handle_v2ray_test(update, context, 'economic')
         if t == 'تست عادی': return await handle_v2ray_test(update, context, 'normal')
         if t == 'تست پرو': return await handle_v2ray_test(update, context, 'pro')
-        if t in ('1 ماهه','3 ماهه') and context.user_data.get('v2ray_tier'):
+        if t in ('1 ماهه','2 ماهه','3 ماهه') and context.user_data.get('v2ray_tier'):
             context.user_data['v2ray_duration'] = t
             return await v2ray_volume_menu(update, context)
         # Handle the custom-volume button whether or not the package emoji was stripped.
@@ -3768,31 +3852,28 @@ async def text_router(update, context):
             context.user_data['v2ray_wait_custom'] = False
             context.user_data['v2ray_custom_gb'] = 5
             return await show_v2ray_custom_timeline(update.message, context, 5)
-        # The 1-month economic/normal plans are generated from fixed prices above,
-        # so handle them directly instead of relying on config.json plan entries.
-        if context.user_data.get('v2ray_duration') == '1 ماهه' and context.user_data.get('v2ray_tier') in ('economic', 'normal'):
-            match = re.fullmatch(r'(\d+)GB\s*—\s*([\d,٬]+)(?:\s*تومان)?', fa_to_en_digits(t).replace('٬', ','))
+        if context.user_data.get('v2ray_duration') in ('1 ماهه', '2 ماهه', '3 ماهه') and context.user_data.get('v2ray_tier') in ('economic', 'normal'):
+            match = re.fullmatch(r'(?:📦\s*)?(\d+)GB\s*—\s*([\d,٬]+)(?:\s*تومان)?', fa_to_en_digits(t).replace('٬', ','))
             if match:
-                gb = int(match.group(1))
-                button_price = int(match.group(2).replace(',', ''))
-                tier = context.user_data.get('v2ray_tier')
-                if 5 <= gb <= 10:
-                    prices = {'economic': {5:45000, 6:50000, 7:55000, 8:60000, 9:65000, 10:70000},
-                              'normal': {5:75000, 6:84000, 7:93000, 8:102000, 9:111000, 10:120000}}
-                    expected = prices[tier][gb]
-                    if button_price == int(round(expected * PRICE_MARKUP)):
-                        return await create_v2ray_order(update, context, f'{gb}GB', expected, '1 ماهه')
+                gb = int(match.group(1)); button_price = int(match.group(2).replace(',', ''))
+                tier = context.user_data.get('v2ray_tier'); duration = context.user_data.get('v2ray_duration')
+                allowed = ([100,200,400,600,800,1000] if tier == 'economic' else [20,40,100,200,300]) if duration in ('1 ماهه','2 ماهه') else ([150,300,600,900,1200] if tier == 'economic' else [30,60,150,450])
+                rate = 6000 if tier == 'economic' else 10000
+                base = gb * rate
+                if gb in allowed and button_price == base:
+                    return await create_v2ray_order(update, context, f'{gb}GB', base, duration)
         if context.user_data.get('v2ray_wait_custom'):
             try:
                 gb = int(fa_to_en_digits(t).replace(',','').replace('٬','').replace('GB','').replace('gb','').strip())
             except Exception:
                 return await update.message.reply_text('❌ حجم باید عدد باشد. مثال: 15')
-            if gb < 5:
-                return await update.message.reply_text('❌ حداقل حجم ۵GB است.')
             tier = context.user_data.get('v2ray_tier')
-            if tier == 'economic': price = 45000 + (gb-5)*5000 if gb <= 10 else gb*6000
-            else: price = 75000 + (gb-5)*9000 if gb <= 10 else gb*10000
-            return await create_v2ray_order(update, context, f'{gb}GB', price, '1 ماهه')
+            minimum = 1 if tier == 'national' else 1
+            if gb < minimum:
+                return await update.message.reply_text(f'❌ حداقل حجم {minimum}GB است.')
+            duration = context.user_data.get('v2ray_duration', '1 ماهه')
+            price = v2ray_custom_price(tier, gb, duration)
+            return await create_v2ray_order(update, context, f'{gb}GB', price, duration)
         if context.user_data.get('v2ray_duration') and t not in ('🔙 برگشت',):
             tier = context.user_data.get('v2ray_tier'); duration = context.user_data.get('v2ray_duration')
             data = v2ray_item().get(tier, {})
@@ -3824,7 +3905,7 @@ async def text_router(update, context):
             "🎟 کد تخفیف خود را وارد کنید:"
         )
 
-    if t == '💎 پرداخت با TonPays':
+    if t in ('💎 پرداخت با TonPays', '💎 پرداخت با TonPays (تأیید آنی)'):
         o = context.user_data.get('order')
         if not o:
             return await update.message.reply_text('❌ سفارش فعالی پیدا نشد.')
@@ -3879,8 +3960,8 @@ async def text_router(update, context):
         return await update.message.reply_text(
             f'💰 شارژ کیف پول\n\n💰 مبلغ: {money(amount)} تومان\n\nروش پرداخت را انتخاب کن:',
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton('💳 کارت‌به‌کارت', callback_data=f'walletpay:card:{oid}')],
-                [InlineKeyboardButton('💎 پرداخت با TonPays', callback_data=f'walletpay:tonpays:{oid}')],
+                [InlineKeyboardButton('💳 کارت‌به‌کارت (کمی با تأخیر)', callback_data=f'walletpay:card:{oid}')],
+                [InlineKeyboardButton('💎 TonPays (تأیید آنی)', callback_data=f'walletpay:tonpays:{oid}')],
             ])
         )
     if t=='📢 اطلاعیه' and is_admin(uid): return await announce(update,context)
@@ -3989,7 +4070,7 @@ async def text_router(update, context):
             o['identity_type']='name'; o['name']=t; o['account_name']=t; o['username']=t
             context.user_data.pop('identity_choice'); return await payment_menu(update,context)
         if context.user_data.get('identity_choice')=='phone': o['identity_type']='phone'; o['phone']=t; context.user_data.pop('identity_choice'); return await payment_menu(update,context)
-        if t=='💳 کارت به کارت': return await show_card(update,context)
+        if t in ('💳 کارت به کارت', '💳 کارت به کارت (کمی با تأخیر)'): return await show_card(update,context)
         if t=='💰 استفاده از کیف پول': return await use_wallet(update,context)
 
     # VPN name selection - accept both display names and config key casing
@@ -4197,28 +4278,33 @@ async def callback(update, context):
         if len(action) >= 2 and action[1] == 'back':
             await q.answer()
             context.user_data.pop('v2ray_custom_gb', None)
-            context.user_data['v2ray_duration'] = '1 ماهه'
             tier = context.user_data.get('v2ray_tier', 'economic')
-            vals = {'economic': [45000,50000,55000,60000,65000,70000], 'normal': [75000,84000,93000,102000,111000,120000]}.get(tier)
-            if vals:
-                rows = [[f'📦 {gb}GB — {shown_price(price)}'] for gb, price in zip(range(5, 11), vals)]
-                rows.extend([['📦 حجم دلخواه (۵GB به بالا)'], ['🔙 برگشت']])
-                return await q.edit_message_text('📦 حجم سرویس را انتخاب کن:', reply_markup=kb(rows))
-            return await q.edit_message_text('مدت سرویس را انتخاب کن:', reply_markup=kb([['📅 1 ماهه'], ['📅 3 ماهه'], ['🔙 برگشت']]))
+            duration = context.user_data.get('v2ray_duration', '1 ماهه')
+            if tier in ('economic', 'normal'):
+                if duration in ('1 ماهه', '2 ماهه'):
+                    volumes = [100, 200, 400, 600, 800, 1000] if tier == 'economic' else [20, 40, 100, 200, 300]
+                else:
+                    volumes = [150, 300, 600, 900, 1200] if tier == 'economic' else [30, 60, 150, 450]
+                rate = 6000 if tier == 'economic' else 10000
+                rows = [[f'📦 {gb}GB — {money(gb * rate)}'] for gb in volumes]
+                rows.extend([['📦 حجم دلخواه'], ['🔙 برگشت']])
+                return await q.edit_message_text(f'📦 پلن‌های {"اقتصادی" if tier == "economic" else "عادی"} — {duration}:', reply_markup=kb(rows))
+            return await q.edit_message_text('مدت سرویس را انتخاب کن:', reply_markup=kb([['📅 1 ماهه'], ['📅 2 ماهه'], ['📅 3 ماهه'], ['🔙 برگشت']]))
         if len(action) >= 2 and action[1] == 'confirm':
             gb = max(5, min(1000, current))
             tier = context.user_data.get('v2ray_tier', 'economic')
-            base_price = (45000 + (gb-5)*5000 if gb <= 10 else gb*6000) if tier == 'economic' else (75000 + (gb-5)*9000 if gb <= 10 else gb*10000)
-            final_price = int(round(base_price * PRICE_MARKUP))
-            labels = {'economic':'اقتصادی-حجمی','normal':'عادی-حجمی','pro':'پرو- نامحدود حجم'}
-            backend_labels = {'economic':'اقتصادی','normal':'عادی','pro':'پرو'}
+            duration = context.user_data.get('v2ray_duration', '1 ماهه')
+            base_price = v2ray_custom_price(tier, gb, duration)
+            final_price = int(round(base_price if tier in ('economic', 'normal', 'national') else base_price * PRICE_MARKUP))
+            labels = {'economic':'اقتصادی-حجمی','normal':'عادی-حجمی','pro':'پرو- نامحدود حجم','national':'ویژه ملی'}
+            backend_labels = {'economic':'اقتصادی','normal':'عادی','pro':'پرو','national':'پرو'}
             order = {
                 'id': make_order_id(), 'user_id': uid, 'service': 'V2Ray',
                 'v2ray_tier': backend_labels.get(tier, tier),
                 'v2ray_tier_display': labels.get(tier, tier),
-                'volume': f'{gb}GB', 'duration': '1 ماهه', 'speed': '-',
-                'price': final_price, 'price_markup_applied': True,
-                'price_markup_rate': PRICE_MARKUP, 'status': 'draft',
+                'volume': f'{gb}GB', 'duration': duration, 'speed': '-',
+                'price': final_price, 'price_markup_applied': tier in ('economic', 'normal', 'national'),
+                'price_markup_rate': 1.0 if tier in ('economic', 'normal', 'national') else PRICE_MARKUP, 'status': 'draft',
                 'created_at': datetime.now().isoformat()
             }
             context.user_data['order'] = order
@@ -4686,13 +4772,13 @@ def _emoji_rows_for_path(uid, path):
     if path == ['🛒 خرید سرویس']:
         return [['🌐 V2Ray'], ['🟢 WireGuard'], ['🔵 OpenVPN'], ['🔙 برگشت']], '🛒 خرید سرویس — نوع سرویس را انتخاب کن:'
     if path == ['🛒 خرید سرویس', '🌐 V2Ray']:
-        return [['💚 اقتصادی-حجمی'], ['🔵 عادی-حجمی'], ['🟣 پرو- نامحدود حجم'], ['🧪 تست رایگان'], ['🔙 برگشت']], '🌐 V2Ray — نوع سرویس را انتخاب کن:'
+        return [['💚 اقتصادی-حجمی'], ['🔵 عادی-حجمی'], ['🇮🇷 ویژه ملی'], ['🟣 پرو- نامحدود حجم'], ['🧪 تست رایگان'], ['🔙 برگشت']], '🌐 V2Ray — نوع سرویس را انتخاب کن:'
     if path == ['🛒 خرید سرویس', '🌐 V2Ray', '🟣 پرو- نامحدود حجم']:
         return [['👤 تک کاربر'], ['👥 چند کاربر'], ['🔙 برگشت']], '🟣 پرو — تعداد کاربران را انتخاب کن:'
     if path == ['🛒 خرید سرویس', '🌐 V2Ray', '🟣 پرو- نامحدود حجم', '👤 تک کاربر']:
         return [['📅 1 ماهه'], ['📅 2 ماهه'], ['📅 3 ماهه'], ['🔙 برگشت']], '👤 پرو تک‌کاربر — مدت را انتخاب کن:'
     if path == ['🛒 خرید سرویس', '🌐 V2Ray', '💚 اقتصادی-حجمی'] or path == ['🛒 خرید سرویس', '🌐 V2Ray', '🔵 عادی-حجمی']:
-        return [['📅 1 ماهه'], ['📅 3 ماهه'], ['🔙 برگشت']], 'V2Ray — مدت را انتخاب کن:'
+        return [['📅 1 ماهه'], ['📅 2 ماهه'], ['📅 3 ماهه'], ['🔙 برگشت']], 'V2Ray — مدت را انتخاب کن:'
     if path == ['🔄 تمدید سرویس']:
         return [['📦 سرویس‌های من'], ['🔙 برگشت']], '🔄 تمدید سرویس — ابتدا سرویس‌هایت را باز کن:'
     if path in (['🟢 WireGuard'], ['🔵 OpenVPN']):
@@ -4783,7 +4869,7 @@ async def emoji_picker_callback(update, context):
 
 
 # ===== FADEHOST DEPLOYMENT DEFAULTS =====
-# Prices are in toman before the configured 20% display/checkout markup.
+# V2Ray economic/normal prices are calculated directly from GB rates.
 # Existing config values always win; this only fills missing entries.
 DEFAULT_PRICE_CONFIG = {
     "V2Ray": {
