@@ -1023,7 +1023,7 @@ async def create_v2ray_order(update, context, volume, price, duration, final_pri
     uid = update.effective_user.id
     tier = context.user_data.get('v2ray_tier', '')
     labels = {'economic':'اقتصادی-حجمی','normal':'عادی-حجمی','pro':'پرو- نامحدود حجم','national':'ویژه ملی'}
-    backend_labels = {'economic':'اقتصادی','normal':'عادی','pro':'پرو','national':'ویژه ملی'}
+    backend_labels = {'economic':'اقتصادی','normal':'عادی','pro':'پرو','national':'پرو'}
     o = {
         'id': make_order_id(), 'user_id': uid, 'service': 'V2Ray',
         'v2ray_tier': backend_labels.get(tier, tier), 'v2ray_tier_display': labels.get(tier, tier), 'volume': str(volume),
@@ -2456,8 +2456,13 @@ async def v2route_create_service(o):
     import httpx
     import re
 
-    tier_map = {"اقتصادی": "economy", "عادی": "standard", "ویژه ملی": "national"}
-    tier = tier_map.get(str(o.get("v2ray_tier", "")))
+    tier_map = {"اقتصادی": "economy", "عادی": "standard", "پرو": "pro", "ویژه ملی": "pro"}
+    # The special national product is displayed as "ویژه ملی" but uses the existing
+    # "پرو" tier name in the V2Route panel.
+    if str(o.get("v2ray_tier_display", "")) == "ویژه ملی":
+        tier = "pro"
+    else:
+        tier = tier_map.get(str(o.get("v2ray_tier", "")))
 
     if not tier or str(o.get("duration", "")) != "1 ماهه":
         return None, "این سفارش برای ساخت خودکار V2Route نیست."
@@ -2639,7 +2644,10 @@ async def admin_confirm(update, context, ok):
     is_auto_v2 = (
         str(o.get('service', '')).lower() == 'v2ray' and
         str(o.get('duration', '')) in ('1 ماهه', '3 ماهه') and
-        str(o.get('v2ray_tier', '')) in ('اقتصادی', 'عادی', 'ویژه ملی')
+        (
+            str(o.get('v2ray_tier', '')) in ('اقتصادی', 'عادی')
+            or str(o.get('v2ray_tier_display', '')) == 'ویژه ملی'
+        )
     )
     if is_auto_v2:
         await context.bot.send_message(uid, '⏳ پرداخت تأیید شد.\n📦 در حال ساخت سرویس شما...')
@@ -3760,7 +3768,7 @@ async def text_router(update, context):
                 return await show_invoice_then_identity(update, context)
     if context.user_data.get('v2ray_flow'):
         tier_map = {'اقتصادی':'economic', 'اقتصادی-حجمی':'economic', 'عادی':'normal', 'عادی-حجمی':'normal', 'پرو':'pro', 'پرو- نامحدود حجم':'pro'}
-        if t == 'ویژه ملی':
+        if t in ('ویژه ملی', '🇮🇷 ویژه ملی'):
             context.user_data['v2ray_tier'] = 'national'
             context.user_data['v2ray_duration'] = '1 ماهه'
             context.user_data['v2ray_flow'] = True
@@ -4245,7 +4253,7 @@ async def callback(update, context):
             gb = max(minimum, min(1000, current))
             final_price = v2ray_custom_price(tier, gb)
             labels = {'economic':'اقتصادی-حجمی','normal':'عادی-حجمی','pro':'پرو- نامحدود حجم','national':'ویژه ملی'}
-            backend_labels = {'economic':'اقتصادی','normal':'عادی','pro':'پرو','national':'ویژه ملی'}
+            backend_labels = {'economic':'اقتصادی','normal':'عادی','pro':'پرو','national':'پرو'}
             order = {
                 'id': make_order_id(), 'user_id': uid, 'service': 'V2Ray',
                 'v2ray_tier': backend_labels.get(tier, tier),
