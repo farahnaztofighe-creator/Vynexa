@@ -1840,6 +1840,9 @@ async def tonpays_request(method, endpoint, payload=None):
             data = {"message": response.text[:500]}
         if not response.is_success:
             print("TONPAYS API ERROR:", response.status_code, data)
+            error_code = str((data.get("error") or {}).get("code") or "") if isinstance(data, dict) else ""
+            if response.status_code == 403 and error_code == "WRONG_API_KEY_KIND":
+                return None, "کلید API انتخاب‌شده از نوع مناسب این API نیست. در پنل TonPays از بخش تنظیمات ← کلید، کلید استاندارد فروشگاه را بساز/بردار و مقدار TONPAYS_API_KEY را به‌روزرسانی کن."
             return None, f"خطای درگاه TonPays (HTTP {response.status_code}). تنظیمات کلید را بررسی کن."
         return data, None
     except Exception as exc:
@@ -1856,7 +1859,7 @@ async def tonpays_create_invoice(update, context, order, kind):
         return await update.effective_message.reply_text("✅ مبلغ قابل پرداختی باقی نمانده است.")
     oid = str(order.get("id") or make_order_id())[:20]
     payload = {"amount": amount, "order_id": oid, "buyer_chat_id": uid}
-    data, err = await tonpays_request("POST", "/api/custom/v1/invoices/telegram/create", payload)
+    data, err = await tonpays_request("POST", "/api/v1/invoices/create", payload)
     if err:
         return await update.effective_message.reply_text("❌ " + err)
     invoice_id = str(data.get("invoice_id") or "").strip()
@@ -1881,14 +1884,17 @@ async def tonpays_create_invoice(update, context, order, kind):
         details += "\n💳 شماره کارت: " + str(data.get("card_number"))
     if data.get("card_name"):
         details += "\n👤 به نام: " + str(data.get("card_name"))
+    pay_url = str(data.get("web_invoice_url") or data.get("invoice_url") or "").strip()
     msg = ("💳 فاکتور پرداخت TonPays ساخته شد.\n\n"
            f"🧾 شناسه فاکتور: {invoice_id}\n"
            f"💰 مبلغ: {money(amount)} تومان" + details +
-           "\n\nپس از پرداخت، دکمه «بررسی پرداخت» را بزن. کیف پول فقط بعد از تأیید قطعی درگاه شارژ می‌شود.")
-    return await update.effective_message.reply_text(msg, reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔎 بررسی پرداخت", callback_data=f"tonpays:check:{stored.get('id')}")],
-        [InlineKeyboardButton("🔙 برگشت", callback_data="tonpays:back")]
-    ]))
+           "\n\nبرای پرداخت، دکمه «رفتن به درگاه» را بزن. پس از پرداخت، «بررسی پرداخت» را انتخاب کن. کیف پول فقط پس از تأیید قطعی درگاه شارژ می‌شود.")
+    rows = []
+    if pay_url.startswith("https://"):
+        rows.append([InlineKeyboardButton("💳 رفتن به درگاه TonPays", url=pay_url)])
+    rows.append([InlineKeyboardButton("🔎 بررسی پرداخت", callback_data=f"tonpays:check:{stored.get('id')}")])
+    rows.append([InlineKeyboardButton("🔙 برگشت", callback_data="tonpays:back")])
+    return await update.effective_message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def tonpays_check_callback(update, context, order_id):
@@ -1903,7 +1909,7 @@ async def tonpays_check_callback(update, context, order_id):
     if not invoice_id:
         return await q.answer("شناسه فاکتور موجود نیست.", show_alert=True)
     await q.answer("در حال بررسی وضعیت پرداخت…")
-    data, err = await tonpays_request("GET", "/api/custom/v1/invoices/check/" + invoice_id)
+    data, err = await tonpays_request("GET", "/api/v1/invoices/check/" + invoice_id)
     if err:
         return await q.message.reply_text("❌ " + err)
     status = str(data.get("status") or "").lower()
