@@ -967,7 +967,9 @@ async def v2ray_volume_menu(update, context):
     if tier == 'national':
         return await update.message.reply_text('🇮🇷 V2Ray ویژه ملی — یک‌ماهه\n\nانتخاب کن:', reply_markup=kb([['📦 خرید حجم دلخواه (گیگی ۳۰۰هزار تومان)'], ['🧪 دریافت تست (100MB-۳۰هزار تومان)'], ['🔙 برگشت']]))
     if tier in ('economic', 'normal'):
-        if duration in ('1 ماهه', '2 ماهه'):
+        if duration == '1 ماهه':
+            volumes = []
+        elif duration == '2 ماهه':
             volumes = [100, 200, 400, 600, 800, 1000] if tier == 'economic' else [20, 40, 100, 200, 300]
         elif duration == '3 ماهه':
             volumes = [150, 300, 600, 900, 1200] if tier == 'economic' else [30, 60, 150, 450]
@@ -975,7 +977,8 @@ async def v2ray_volume_menu(update, context):
             volumes = []
         rate = 6000 if tier == 'economic' else 10000
         rows = [[f'📦 {gb}GB — {money(gb * rate)}'] for gb in volumes]
-        rows.append(['📦 حجم دلخواه'])
+        if duration == '1 ماهه':
+            rows.append(['📦 حجم دلخواه (۵GB به بالا)'])
         rows.append(['🔙 برگشت'])
         return await update.message.reply_text(f'📦 پلن‌های {"اقتصادی" if tier == "economic" else "عادی"} — {duration}:', reply_markup=kb(rows))
     if tier == 'pro':
@@ -997,7 +1000,7 @@ def v2ray_custom_price(tier, gb, duration=None):
 async def show_v2ray_custom_timeline(message, context, gb, edit=False):
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     tier = context.user_data.get('v2ray_tier', 'economic')
-    minimum = 1 if tier == 'national' else 1
+    minimum = 1 if tier == 'national' else 5
     gb = max(minimum, min(1200, int(gb)))
     context.user_data['v2ray_custom_gb'] = gb
     duration = context.user_data.get('v2ray_duration', '1 ماهه')
@@ -1848,7 +1851,7 @@ async def tonpays_request(method, endpoint, payload=None):
         return None, "کلید TonPays تنظیم نشده است. در Environment Variables مقدار TONPAYS_API_KEY را وارد کن."
     headers = {"X-API-Key": key, "Accept": "application/json"}
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=12.0) as client:
             response = await client.request(method, TONPAYS_BASE_URL + endpoint, headers=headers, json=payload)
         try:
             data = response.json()
@@ -1880,7 +1883,7 @@ async def tonpays_create_invoice(update, context, order, kind):
         )
     # TonPays requires a fresh merchant order_id for every invoice attempt.
     # Keep our internal order ID unchanged and store the unique gateway ID separately.
-    gateway_order_id = "tp-" + secrets.token_hex(9)
+    gateway_order_id = "tp-" + secrets.token_hex(8)
     payload = {"amount": amount, "order_id": gateway_order_id, "buyer_chat_id": uid}
     data, err = await tonpays_request("POST", "/api/v1/invoices/create", payload)
     if err:
@@ -3819,7 +3822,11 @@ async def text_router(update, context):
                 return await show_invoice_then_identity(update, context)
     if context.user_data.get('v2ray_flow'):
         tier_map = {'اقتصادی':'economic', 'اقتصادی-حجمی':'economic', 'عادی':'normal', 'عادی-حجمی':'normal', 'پرو':'pro', 'پرو- نامحدود حجم':'pro', 'ویژه ملی':'national'}
+        tier_text = re.sub(r'^[^\wآ-ی]+', '', str(t)).strip()
+        tier_text = tier_text.replace('🇮🇷', '').strip()
         if t in tier_map: return await v2ray_duration_menu(update, context, tier_map[t])
+        if tier_text in tier_map: return await v2ray_duration_menu(update, context, tier_map[tier_text])
+        if 'ویژه ملی' in tier_text: return await v2ray_duration_menu(update, context, 'national')
         if t == 'تک کاربر' and context.user_data.get('v2ray_tier') == 'pro':
             context.user_data['pro_user_mode'] = 'single'
             return await update.message.reply_text('👤 پرو نامحدود حجم — تک کاربر\n\nمدت را انتخاب کن:', reply_markup=kb([['📅 1 ماهه'], ['📅 2 ماهه'], ['📅 3 ماهه'], ['🔙 برگشت']]))
@@ -3836,10 +3843,10 @@ async def text_router(update, context):
             return await show_v2ray_custom_timeline(update.message, context, 1)
         if t in ('دریافت تست (100MB-۳۰هزار تومان)', '🧪 دریافت تست (100MB-۳۰هزار تومان)') and context.user_data.get('v2ray_tier') == 'national':
             return await create_v2ray_order(update, context, '0.1GB (تست)', 30000, '1 ماهه')
-        if t in ('حجم دلخواه', '📦 حجم دلخواه') and context.user_data.get('v2ray_tier') in ('economic', 'normal'):
-            context.user_data['v2ray_custom_gb'] = 1
+        if t in ('حجم دلخواه', '📦 حجم دلخواه', 'حجم دلخواه (۵GB به بالا)', '📦 حجم دلخواه (۵GB به بالا)') and context.user_data.get('v2ray_tier') in ('economic', 'normal') and context.user_data.get('v2ray_duration') == '1 ماهه':
+            context.user_data['v2ray_custom_gb'] = 5
             context.user_data['v2ray_wait_custom'] = True
-            return await show_v2ray_custom_timeline(update.message, context, 1)
+            return await show_v2ray_custom_timeline(update.message, context, 5)
         if t == 'تست رایگان': return await v2ray_test_menu(update, context)
         if t == 'تست اقتصادی': return await handle_v2ray_test(update, context, 'economic')
         if t == 'تست عادی': return await handle_v2ray_test(update, context, 'normal')
@@ -3848,7 +3855,7 @@ async def text_router(update, context):
             context.user_data['v2ray_duration'] = t
             return await v2ray_volume_menu(update, context)
         # Handle the custom-volume button whether or not the package emoji was stripped.
-        if t in ('حجم دلخواه (۵GB به بالا)', '📦 حجم دلخواه (۵GB به بالا)'):
+        if t in ('حجم دلخواه (۵GB به بالا)', '📦 حجم دلخواه (۵GB به بالا)') and context.user_data.get('v2ray_duration') == '1 ماهه':
             context.user_data['v2ray_wait_custom'] = False
             context.user_data['v2ray_custom_gb'] = 5
             return await show_v2ray_custom_timeline(update.message, context, 5)
@@ -3868,7 +3875,7 @@ async def text_router(update, context):
             except Exception:
                 return await update.message.reply_text('❌ حجم باید عدد باشد. مثال: 15')
             tier = context.user_data.get('v2ray_tier')
-            minimum = 1 if tier == 'national' else 1
+            minimum = 1 if tier == 'national' else 5
             if gb < minimum:
                 return await update.message.reply_text(f'❌ حداقل حجم {minimum}GB است.')
             duration = context.user_data.get('v2ray_duration', '1 ماهه')
@@ -4287,7 +4294,9 @@ async def callback(update, context):
                     volumes = [150, 300, 600, 900, 1200] if tier == 'economic' else [30, 60, 150, 450]
                 rate = 6000 if tier == 'economic' else 10000
                 rows = [[f'📦 {gb}GB — {money(gb * rate)}'] for gb in volumes]
-                rows.extend([['📦 حجم دلخواه'], ['🔙 برگشت']])
+                if duration == '1 ماهه':
+                    rows.append(['📦 حجم دلخواه (۵GB به بالا)'])
+                rows.append(['🔙 برگشت'])
                 return await q.edit_message_text(f'📦 پلن‌های {"اقتصادی" if tier == "economic" else "عادی"} — {duration}:', reply_markup=kb(rows))
             return await q.edit_message_text('مدت سرویس را انتخاب کن:', reply_markup=kb([['📅 1 ماهه'], ['📅 2 ماهه'], ['📅 3 ماهه'], ['🔙 برگشت']]))
         if len(action) >= 2 and action[1] == 'confirm':
