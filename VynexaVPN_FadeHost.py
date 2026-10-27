@@ -32,6 +32,7 @@ from telegram.ext import (
     ChatJoinRequestHandler, ChatMemberHandler, ContextTypes, filters
 )
 from telegram.request import HTTPXRequest
+import httpx
 try:
     from telegram import ReactionTypeEmoji
 except ImportError:
@@ -1817,6 +1818,131 @@ async def vynexa_discount_handler(update, context):
             "❌ خطایی هنگام بررسی کد تخفیف رخ داد."
         )
 
+TONPAYS_BASE_URL = "https://tonpays.online"
+
+
+def tonpays_api_key():
+    cfg = load_config()
+    return str(os.environ.get("TONPAYS_API_KEY") or cfg.get("tonpays_api_key") or cfg.get("TONPAYS_API_KEY") or "").strip()
+
+
+async def tonpays_request(method, endpoint, payload=None):
+    key = tonpays_api_key()
+    if not key:
+        return None, "کلید TonPays تنظیم نشده است. در Environment Variables مقدار TONPAYS_API_KEY را وارد کن."
+    headers = {"X-API-Key": key, "Accept": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.request(method, TONPAYS_BASE_URL + endpoint, headers=headers, json=payload)
+        try:
+            data = response.json()
+        except Exception:
+            data = {"message": response.text[:500]}
+        if not response.is_success:
+            print("TONPAYS API ERROR:", response.status_code, data)
+            return None, f"خطای درگاه TonPays (HTTP {response.status_code}). تنظیمات کلید را بررسی کن."
+        return data, None
+    except Exception as exc:
+        print("TONPAYS REQUEST ERROR:", repr(exc))
+        return None, "ارتباط با درگاه TonPays برقرار نشد؛ کمی بعد دوباره تلاش کن."
+
+
+async def tonpays_create_invoice(update, context, order, kind):
+    uid = int(order.get("user_id") or update.effective_user.id)
+    amount = int(order.get("price", 0) if kind == "service" else order.get("amount", 0))
+    if kind == "service" and int(order.get("wallet_paid", 0) or 0):
+        amount = max(0, amount - int(order.get("wallet_paid", 0) or 0))
+    if amount <= 0:
+        return await update.effective_message.reply_text("✅ مبلغ قابل پرداختی باقی نمانده است.")
+    oid = str(order.get("id") or make_order_id())[:20]
+    payload = {"amount": amount, "order_id": oid, "buyer_chat_id": uid}
+    data, err = await tonpays_request("POST", "/api/custom/v1/invoices/telegram/create", payload)
+    if err:
+        return await update.effective_message.reply_text("❌ " + err)
+    invoice_id = str(data.get("invoice_id") or "").strip()
+    if not invoice_id:
+        print("TONPAYS CREATE RESPONSE MISSING INVOICE ID:", data)
+        return await update.effective_message.reply_text("❌ درگاه فاکتور معتبر برنگرداند. با پشتیبانی پیگیری کن.")
+    orders = load_orders()
+    stored = orders.get(str(order.get("id")), order)
+    stored["tonpays_invoice_id"] = invoice_id
+    stored["tonpays_amount"] = amount
+    stored["tonpays_kind"] = kind
+    stored["tonpays_status"] = str(data.get("status") or "pending")
+    stored["payment_method"] = "tonpays"
+    orders[str(stored.get("id"))] = stored
+    save_orders(orders)
+    if kind == "service":
+        context.user_data["order"] = stored
+    else:
+        context.user_data["wallet_receipt_order"] = str(stored.get("id"))
+    details = ""
+    if data.get("card_number"):
+        details += "\n💳 شماره کارت: " + str(data.get("card_number"))
+    if data.get("card_name"):
+        details += "\n👤 به نام: " + str(data.get("card_name"))
+    msg = ("💳 فاکتور پرداخت TonPays ساخته شد.\n\n"
+           f"🧾 شناسه فاکتور: {invoice_id}\n"
+           f"💰 مبلغ: {money(amount)} تومان" + details +
+           "\n\nپس از پرداخت، دکمه «بررسی پرداخت» را بزن. کیف پول فقط بعد از تأیید قطعی درگاه شارژ می‌شود.")
+    return await update.effective_message.reply_text(msg, reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔎 بررسی پرداخت", callback_data=f"tonpays:check:{stored.get('id')}")],
+        [InlineKeyboardButton("🔙 برگشت", callback_data="tonpays:back")]
+    ]))
+
+
+async def tonpays_check_callback(update, context, order_id):
+    q = update.callback_query
+    orders = load_orders()
+    o = orders.get(str(order_id))
+    if not o or int(o.get("user_id", 0)) != int(q.from_user.id):
+        return await q.answer("فاکتور پیدا نشد یا متعلق به شما نیست.", show_alert=True)
+    if o.get("tonpays_paid_processed"):
+        return await q.answer("این پرداخت قبلاً ثبت شده است.", show_alert=True)
+    invoice_id = str(o.get("tonpays_invoice_id") or "")
+    if not invoice_id:
+        return await q.answer("شناسه فاکتور موجود نیست.", show_alert=True)
+    await q.answer("در حال بررسی وضعیت پرداخت…")
+    data, err = await tonpays_request("GET", "/api/custom/v1/invoices/check/" + invoice_id)
+    if err:
+        return await q.message.reply_text("❌ " + err)
+    status = str(data.get("status") or "").lower()
+    paid = data.get("paid") is True and status == "completed"
+    o["tonpays_status"] = status
+    if not paid:
+        orders[str(order_id)] = o
+        save_orders(orders)
+        return await q.message.reply_text(f"⏳ پرداخت هنوز تأیید نشده است.\nوضعیت فعلی: {status or 'نامشخص'}\nبعد از پرداخت دوباره بررسی کن.")
+    o["tonpays_paid_processed"] = True
+    o["tonpays_paid_at"] = datetime.now().isoformat()
+    o["status"] = "paid" if o.get("tonpays_kind") == "service" else "wallet_paid"
+    orders[str(order_id)] = o
+    save_orders(orders)
+    uid = int(o.get("user_id"))
+    if o.get("tonpays_kind") == "wallet":
+        amount = int(o.get("amount", o.get("tonpays_amount", 0)) or 0)
+        # Idempotency marker is saved before wallet update to avoid duplicate credits.
+        users = load_users()
+        u = users.setdefault(str(uid), {"user_id": uid, "wallet": 0})
+        if not o.get("tonpays_wallet_credited"):
+            u["wallet"] = int(u.get("wallet", 0) or 0) + amount
+            save_users(users)
+            o["tonpays_wallet_credited"] = True
+            orders[str(order_id)] = o
+            save_orders(orders)
+        await q.message.reply_text(f"✅ پرداخت TonPays تأیید شد و کیف پول شارژ شد.\n💰 مبلغ: {money(amount)}\n💵 موجودی جدید: {money(wallet_balance(uid))}")
+        linked = o.get("linked_order_id")
+        if linked:
+            await q.message.reply_text("برای پرداخت باقی‌مانده سفارش، به منوی خرید برگرد و از کیف پول استفاده کن.")
+        return
+    # پرداخت سرویس قطعی است؛ برای ادامه روال فعلی ساخت سرویس، مدیر مطلع می‌شود.
+    o["payment"] = "tonpays"
+    orders[str(order_id)] = o
+    save_orders(orders)
+    await q.message.reply_text("✅ پرداخت تأیید شد. سفارش برای آماده‌سازی سرویس ثبت شد.")
+    await notify_admin_payment(context, o, None)
+
+
 async def payment_menu(update, context):
     o = context.user_data.get('order')
     if not o: return
@@ -1824,6 +1950,7 @@ async def payment_menu(update, context):
         order_summary(o) + '\n\nروش پرداخت را انتخاب کن:',
         reply_markup=kb([
             ['💳 کارت به کارت'],
+            ['💎 پرداخت با TonPays'],
             ['💰 استفاده از کیف پول'],
             ['🎟 کد تخفیف دارم'],
             ['🔙 برگشت']
@@ -3691,6 +3818,12 @@ async def text_router(update, context):
             "🎟 کد تخفیف خود را وارد کنید:"
         )
 
+    if t == '💎 پرداخت با TonPays':
+        o = context.user_data.get('order')
+        if not o:
+            return await update.message.reply_text('❌ سفارش فعالی پیدا نشد.')
+        return await tonpays_create_invoice(update, context, o, 'service')
+
     if t=='💳 پرداخت باقی‌مانده با کارت‌به‌کارت':
         o = context.user_data.get('order')
         if not o:
@@ -3736,9 +3869,14 @@ async def text_router(update, context):
         orders=load_orders()
         orders[oid]=o
         save_orders(orders)
-        card, owner = payment_details()
         context.user_data['wallet_receipt_order']=oid
-        return await update.message.reply_text(f'💳 شارژ کیف پول\n\n💰 مبلغ: {money(amount)}\n💳 شماره کارت: {card}\n👤 به نام: {owner}\n\nبعد از پرداخت، عکس رسید را ارسال کن.')
+        return await update.message.reply_text(
+            f'💰 شارژ کیف پول\n\n💰 مبلغ: {money(amount)} تومان\n\nروش پرداخت را انتخاب کن:',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton('💳 کارت‌به‌کارت', callback_data=f'walletpay:card:{oid}')],
+                [InlineKeyboardButton('💎 پرداخت با TonPays', callback_data=f'walletpay:tonpays:{oid}')],
+            ])
+        )
     if t=='📢 اطلاعیه' and is_admin(uid): return await announce(update,context)
     if t=='📢 ارسال پیام به کانال' and is_admin(uid): return await send_to_channel(update,context)
     if t=='🤖 ربات روشن/خاموش' and is_admin(uid): return await toggle_bot(update,context)
@@ -4000,6 +4138,26 @@ async def buy_confirmation_callback(update, context):
 
 async def callback(update, context):
     q=update.callback_query; d=q.data; uid=q.from_user.id
+    if d.startswith('tonpays:check:'):
+        return await tonpays_check_callback(update, context, d.split(':', 2)[2])
+    if d == 'tonpays:back':
+        await q.answer()
+        return await q.message.reply_text('از منو می‌تونی دوباره وارد بخش پرداخت بشی.')
+    if d.startswith('walletpay:'):
+        parts = d.split(':', 2)
+        if len(parts) < 3:
+            return await q.answer('درخواست نامعتبر است.', show_alert=True)
+        method, oid = parts[1], parts[2]
+        orders = load_orders(); o = orders.get(oid)
+        if not o or int(o.get('user_id', 0)) != int(uid):
+            return await q.answer('درخواست شارژ پیدا نشد.', show_alert=True)
+        await q.answer()
+        if method == 'tonpays':
+            return await tonpays_create_invoice(update, context, o, 'wallet')
+        if method == 'card':
+            card, owner = payment_details()
+            context.user_data['wallet_receipt_order'] = oid
+            return await q.message.reply_text(f'💳 شارژ کیف پول\n\n💰 مبلغ: {money(o.get("amount", 0))} تومان\n💳 شماره کارت: {card}\n👤 به نام: {owner}\n\nبعد از پرداخت، عکس رسید را همینجا ارسال کن.')
     if d.startswith('invoiceconfirm:'):
         action = d.split(':', 1)[1]
         order = context.user_data.get('order')
