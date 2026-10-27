@@ -109,6 +109,39 @@ def load_config():
 def save_config(c):
     write_json(CONFIG_FILE, c)
 
+
+def payment_details():
+    """Return card details from persistent config first, then host environment.
+    Empty values and old placeholder strings are ignored so they cannot mask
+    CARD_NUMBER / CARD_NAME configured in the hosting panel.
+    """
+    cfg = load_config()
+    def usable(*values):
+        for value in values:
+            if value is None:
+                continue
+            value = str(value).strip()
+            if not value:
+                continue
+            low = value.casefold()
+            if any(marker in low for marker in (
+                'تنظیم نشده', 'تنظیم نشده است', 'وارد نشده',
+                'config.json', 'environment variables', 'نام صاحب کارت'
+            )):
+                continue
+            return value
+        return None
+    card = usable(
+        cfg.get('card_number'), cfg.get('CARD_NUMBER'),
+        os.environ.get('CARD_NUMBER'), os.environ.get('PAYMENT_CARD_NUMBER')
+    ) or 'شماره کارت در تنظیمات هاست وارد نشده'
+    owner = usable(
+        cfg.get('card_name'), cfg.get('CARD_NAME'),
+        os.environ.get('CARD_NAME'), os.environ.get('CARD_HOLDER_NAME'),
+        os.environ.get('PAYMENT_CARD_NAME')
+    ) or 'نام صاحب کارت در تنظیمات هاست وارد نشده'
+    return card, owner
+
 def setup_ai_config():
     # پاسخ‌گویی محلی؛ بدون OpenAI و بدون API Key
     c = load_config()
@@ -1801,8 +1834,7 @@ async def payment_menu(update, context):
 async def show_card(update, context):
     o = context.user_data.get('order')
     if not o: return
-    card = load_config().get('card_number') or os.environ.get('CARD_NUMBER') or 'شماره کارت در Environment Variables تنظیم نشده'
-    owner = load_config().get('card_name') or os.environ.get('CARD_NAME') or 'نام صاحب کارت در تنظیمات وارد نشده'
+    card, owner = payment_details()
     context.user_data['waiting_receipt'] = True
     await update.message.reply_text(
         '💳 کارت به کارت\n\n'
@@ -3667,8 +3699,7 @@ async def text_router(update, context):
         if remaining <= 0:
             return await update.message.reply_text('✅ مبلغ سفارش قبلاً کامل پرداخت شده است.')
         context.user_data['waiting_receipt'] = True
-        card = load_config().get('card_number','شماره کارت در config.json تنظیم نشده')
-        owner = load_config().get('card_name','نام صاحب کارت')
+        card, owner = payment_details()
         return await update.message.reply_text(
             f"💳 پرداخت باقی‌مانده سفارش\n\n"
             f"💰 مبلغ قابل پرداخت: {money(remaining)}\n"
@@ -3705,7 +3736,7 @@ async def text_router(update, context):
         orders=load_orders()
         orders[oid]=o
         save_orders(orders)
-        card=load_config().get('card_number','شماره کارت در config.json تنظیم نشده'); owner=load_config().get('card_name','نام صاحب کارت')
+        card, owner = payment_details()
         context.user_data['wallet_receipt_order']=oid
         return await update.message.reply_text(f'💳 شارژ کیف پول\n\n💰 مبلغ: {money(amount)}\n💳 شماره کارت: {card}\n👤 به نام: {owner}\n\nبعد از پرداخت، عکس رسید را ارسال کن.')
     if t=='📢 اطلاعیه' and is_admin(uid): return await announce(update,context)
@@ -4631,7 +4662,7 @@ def main():
         _VYNEXA_INSTANCE_LOCK = open(__import__('os').path.join(__import__('tempfile').gettempdir(), '.vynexa_rebuilt_v22.lock'), 'w')
         fcntl.flock(_VYNEXA_INSTANCE_LOCK.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        raise SystemExit('VynexaVPN is already running; stop the duplicate process first.')
+        raise SystemExit('VynexaVPN already has a process on this host. Stop the duplicate process; only one instance may use this bot token at a time.')
     except Exception as lock_error:
         print('INSTANCE LOCK WARNING:', repr(lock_error)[:120])
     token=find_token()
