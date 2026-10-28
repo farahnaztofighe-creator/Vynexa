@@ -509,7 +509,7 @@ def kb(rows):
 
 
 def home(uid):
-    rows = [['🛒 خرید سرویس', '🔄 تمدید سرویس'], ['📦 سرویس‌های من', '🎧 پشتیبانی'], ['💰 کیف پول'], ['🌐 پروکسی تلگرام'], ['👥 زیرمجموعه‌گیری'], ['🤖 سوالات هوش مصنوعی'], ['📚 راهنمای اتصال', '📜 قوانین خرید']]
+    rows = [['🛒 خرید سرویس', '🔄 تمدید سرویس'], ['📦 سرویس‌های من', '🎧 پشتیبانی'], ['💰 کیف پول'], ['🌐 پروکسی تلگرام'], ['👥 زیرمجموعه‌گیری'], ['🤖 سوالات هوش مصنوعی'], ['📚 راهنمای اتصال', '📜 قوانین خرید'], ['🌐 کانال‌ها و ربات‌های ما'], ['🔐 چجوری بهتون اعتماد کنم؟']]
     if is_admin(uid):
         rows += [['📢 اطلاعیه', '🤖 ربات روشن/خاموش']]
     return kb(rows)
@@ -521,6 +521,8 @@ def admin_panel():
         ['👥 سرویس مشتری‌ها'],
         ['🚀 ارسال کانفیگ'],
         ['👥 زیرمجموعه‌گیری'],
+        ['💰 ویرایش قیمت سرویس‌ها', '👛 درخواست‌های کیف پول'],
+        ['🌐 کانال‌ها و ربات‌های ما', '🔐 چجوری بهتون اعتماد کنم؟'],
         ['🎨 ادیت رنگ دکمه‌ها', '📝 ویرایش متن‌ها'],
         ['📢 ارسال پیام به کانال'],
         ['🔙 خروج به صفحه اصلی'],
@@ -972,7 +974,8 @@ async def v2ray_volume_menu(update, context):
     duration = context.user_data.get('v2ray_duration')
     data = v2ray_item().get(tier, {})
     if duration == '1 ماهه' and tier in ('economic', 'normal'):
-        rate = {'economic': 6000, 'normal': 10000}[tier]
+        rates=v2ray_price_settings()
+        rate = {'economic': rates['economic_per_gb'], 'normal': rates['normal_per_gb']}[tier]
         rows = [[f'📦 {gb}GB — {money(gb * rate)}'] for gb in range(5, 11)]
         rows.append(['📦 حجم دلخواه (۵GB به بالا)'])
         rows.append(['🔙 برگشت'])
@@ -984,17 +987,25 @@ async def v2ray_volume_menu(update, context):
         rows.append(['🔙 برگشت'])
         return await update.message.reply_text('📦 حجم سرویس را انتخاب کن:', reply_markup=kb(rows))
     if tier == 'pro':
-        return await create_v2ray_order(update, context, 'نامحدود', 220000, '1 ماهه')
+        return await create_v2ray_order(update, context, 'نامحدود', v2ray_price_settings()['pro_single_1m'], '1 ماهه')
 
+
+def v2ray_price_settings():
+    defaults={
+        'economic_per_gb':6000, 'normal_per_gb':10000, 'national_per_gb':300000,
+        'pro_single_1m':100000, 'pro_single_2m':200000, 'pro_single_3m':300000,
+        'pro_multi_1m':220000, 'test_100mb':30000,
+    }
+    cfg=load_config(); saved=cfg.get('custom_volume_rates',{})
+    if not isinstance(saved,dict): saved={}
+    return {k:int(saved.get(k,v) or v) for k,v in defaults.items()}
 
 def v2ray_custom_price(tier, gb):
     # These are final customer-facing prices; do not add the global markup again.
-    if tier == 'economic':
-        return int(gb) * 6000
-    if tier == 'normal':
-        return int(gb) * 10000
-    if tier == 'national':
-        return int(gb) * 300000
+    rates=v2ray_price_settings()
+    if tier == 'economic': return int(gb) * rates['economic_per_gb']
+    if tier == 'normal': return int(gb) * rates['normal_per_gb']
+    if tier == 'national': return int(gb) * rates['national_per_gb']
     return 0
 
 
@@ -1053,7 +1064,7 @@ async def v2ray_test_menu(update, context):
     context.user_data['v2ray_flow'] = True
     return await update.message.reply_text(
         '🧪 تست رایگان V2Ray\n\nنوع تست را انتخاب کن:',
-        reply_markup=kb([['🧪 تست اقتصادی'], ['🧪 تست عادی'], ['🟣 تست پرو'], ['🇮🇷 تست ویژه ملی — 30,000 تومان'], ['🔙 برگشت']])
+        reply_markup=kb([['🧪 تست اقتصادی'], ['🧪 تست عادی'], ['🟣 تست پرو'], [f'🇮🇷 تست ویژه ملی — {money(v2ray_price_settings()["test_100mb"])}'], ['🔙 برگشت']])
     )
 
 
@@ -3405,6 +3416,44 @@ async def telegram_proxy_menu(update, context):
                                            reply_markup=home(update.effective_user.id))
 
 
+def _vpn_price_leaves(node, path=()):
+    """Return editable numeric price leaves while preserving the existing config structure."""
+    found=[]
+    if isinstance(node, dict):
+        for key,value in node.items():
+            # Only actual numeric leaf values are prices; don't offer flags/IDs.
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int,float)):
+                found.append((path+(str(key),), value))
+            elif isinstance(value, dict):
+                found.extend(_vpn_price_leaves(value, path+(str(key),)))
+    return found
+
+def _vpn_get_path(obj, path):
+    cur=obj
+    for key in path: cur=cur[key]
+    return cur
+
+def _vpn_set_path(obj, path, value):
+    cur=obj
+    for key in path[:-1]: cur=cur[key]
+    cur[path[-1]]=value
+
+def _vpn_path_label(path):
+    return ' / '.join(path)
+
+def _vpn_links_text(cfg):
+    links=cfg.get('other_links', [])
+    lines=['🌐 کانال‌ها و ربات‌های ما','']
+    if isinstance(links,list):
+        for item in links:
+            if isinstance(item,dict) and item.get('url'):
+                lines.append(f"{item.get('title','لینک')}\n{item.get('url')}")
+    if len(lines)==2:
+        lines += ['هنوز لینکی ثبت نشده است.','مدیر می‌تواند لینک‌ها را از پنل مدیریت تنظیم کند.']
+    return '\n'.join(lines)
+
 async def text_router(update, context):
 
     if not update.message or not update.message.text:
@@ -3416,12 +3465,14 @@ async def text_router(update, context):
     if not bot_enabled() and not is_admin(uid):
         return await update.message.reply_text('🔴 ربات فعلاً خاموش است. لطفاً بعداً دوباره مراجعه کن.')
 
-    if t == '📚 راهنمای اتصال':
-        guide = ('📚 راهنمای اتصال VynexaVPN\n\n۱. از «🛒 خرید سرویس» سرویس موردنظرت را انتخاب کن.\n۲. بعد از تأیید پرداخت، کانفیگ یا لینک اتصال را از ربات دریافت کن.\n۳. برنامهٔ سازگار با نوع سرویس را نصب کن و لینک/کانفیگ را داخل آن وارد کن.\n۴. اگر وصل نشدی، ابتدا اینترنت و تاریخ/ساعت دستگاه را بررسی کن؛ سپس از «🎧 پشتیبانی» کمک بگیر.\n\n⚠️ نام برنامه و مراحل دقیق ممکن است بسته به نوع سرویس متفاوت باشد.')
-        return await update.message.reply_text(guide, reply_markup=kb([['🛒 خرید سرویس'], ['🎧 پشتیبانی'], ['🔙 خروج به صفحه اصلی']]))
-    if t == '📜 قوانین خرید':
-        rules = ('📜 قوانین خرید سرویس\n\n• قبل از پرداخت، نوع سرویس، حجم، مدت و مبلغ فاکتور را بررسی کن.\n• سفارش پس از ثبت رسید باید توسط مدیر بررسی شود؛ ارسال رسید به‌تنهایی به‌معنای تأیید پرداخت نیست.\n• کانفیگ و اطلاعات ورود را در اختیار افراد ناشناس قرار نده.\n• تمدید را پیش از پایان اعتبار انجام بده؛ شرایط تمدید به سرویس انتخابی بستگی دارد.\n• در صورت مغایرت مبلغ یا بروز مشکل، قبل از پرداخت دوباره با پشتیبانی تماس بگیر.')
-        return await update.message.reply_text(rules, reply_markup=kb([['🎧 پشتیبانی'], ['🛒 خرید سرویس'], ['🔙 خروج به صفحه اصلی']]))
+    if t == '📚 راهنمای اتصال' and not (is_admin(uid) and context.user_data.get('vpn_text_selecting')):
+        cfg=load_config(); custom=(cfg.get('custom_texts',{}) or {}).get('guide','')
+        guide = custom or ('📚 راهنمای اتصال VynexaVPN\n\n۱. از «🛒 خرید سرویس» سرویس موردنظرت را انتخاب کن.\n۲. بعد از تأیید پرداخت، کانفیگ یا لینک اتصال را از ربات دریافت کن.\n۳. برنامهٔ سازگار با نوع سرویس را نصب کن و لینک/کانفیگ را داخل آن وارد کن.\n۴. اگر وصل نشدی، ابتدا اینترنت و تاریخ/ساعت دستگاه را بررسی کن؛ سپس از «🎧 پشتیبانی» کمک بگیر.\n\n⚠️ نام برنامه و مراحل دقیق ممکن است بسته به نوع سرویس متفاوت باشد.')
+        return await update.message.reply_text(guide, reply_markup=kb([['🛒 خرید سرویس'], ['🎧 پشتیبانی'], ['🔙 خروج به صفحه اصلی']]), parse_mode='HTML' if '<tg-emoji' in guide else None)
+    if t == '📜 قوانین خرید' and not (is_admin(uid) and context.user_data.get('vpn_text_selecting')):
+        cfg=load_config(); custom=(cfg.get('custom_texts',{}) or {}).get('rules','')
+        rules = custom or ('📜 قوانین خرید سرویس\n\n• قبل از پرداخت، نوع سرویس، حجم، مدت و مبلغ فاکتور را بررسی کن.\n• سفارش پس از ثبت رسید باید توسط مدیر بررسی شود؛ ارسال رسید به‌تنهایی به‌معنای تأیید پرداخت نیست.\n• کانفیگ و اطلاعات ورود را در اختیار افراد ناشناس قرار نده.\n• تمدید را پیش از پایان اعتبار انجام بده؛ شرایط تمدید به سرویس انتخابی بستگی دارد.\n• در صورت مغایرت مبلغ یا بروز مشکل، قبل از پرداخت دوباره با پشتیبانی تماس بگیر.')
+        return await update.message.reply_text(rules, reply_markup=kb([['🎧 پشتیبانی'], ['🛒 خرید سرویس'], ['🔙 خروج به صفحه اصلی']]), parse_mode='HTML' if '<tg-emoji' in rules else None)
 
     if is_admin(uid) and context.user_data.get('vpn_color_selecting_button'):
         if t in ('❌ لغو', '🔙 پنل مدیریت'):
@@ -3448,13 +3499,32 @@ async def text_router(update, context):
             context.user_data.pop('vpn_color_target', None)
             return await update.message.reply_text('تغییر رنگ لغو شد.', reply_markup=admin_panel())
     if is_admin(uid) and context.user_data.get('vpn_text_selecting'):
-        if t in ('👋 پیام خوش‌آمد', '🎧 متن پشتیبانی'):
+        text_options={'👋 پیام خوش‌آمد':'welcome','🎧 متن پشتیبانی':'support','🔐 متن اعتمادسازی':'trust','📚 راهنمای اتصال':'guide','📜 قوانین خرید':'rules','🌐 لینک‌های کانال‌ها و ربات‌ها':'links'}
+        if t in text_options:
             context.user_data.pop('vpn_text_selecting', None)
-            context.user_data['vpn_text_edit_key'] = 'welcome' if t == '👋 پیام خوش‌آمد' else 'support'
-            return await update.message.reply_text('متن جدید را بفرست. برای لغو «❌ لغو» را بزن.')
+            key=text_options[t]
+            if key=='links':
+                context.user_data['vpn_links_editing']=True
+                return await update.message.reply_text('برای هر لینک یک خط بفرست:\nعنوان|https://t.me/example\nعنوان دوم|https://t.me/example2\nلینک‌های قبلی جایگزین می‌شوند. برای لغو «❌ لغو» را بزن.')
+            context.user_data['vpn_text_edit_key'] = key
+            return await update.message.reply_text('متن جدید را بفرست. برای لغو «❌ لغو» را بزن؛ ایموجی‌های سفارشی داخل متن حفظ می‌شوند.')
         if t == '❌ لغو':
             context.user_data.pop('vpn_text_selecting', None)
             return await update.message.reply_text('ویرایش متن لغو شد.', reply_markup=admin_panel())
+    if is_admin(uid) and context.user_data.get('vpn_links_editing'):
+        if t=='❌ لغو':
+            context.user_data.pop('vpn_links_editing',None)
+            return await update.message.reply_text('ویرایش لینک‌ها لغو شد.',reply_markup=admin_panel())
+        links=[]
+        for line in t.splitlines():
+            parts=line.split('|',1)
+            if len(parts)==2 and parts[0].strip() and parts[1].strip().startswith(('https://','http://','tg://')):
+                links.append({'title':parts[0].strip()[:80],'url':parts[1].strip()})
+        if not links:
+            return await update.message.reply_text('❌ قالب درست نیست. هر خط باید «عنوان|لینک» باشد.')
+        cfg=load_config(); cfg['other_links']=links; save_config(cfg); context.user_data.pop('vpn_links_editing',None)
+        return await update.message.reply_text(f'✅ {len(links)} لینک ذخیره شد.',reply_markup=admin_panel())
+
     if is_admin(uid) and context.user_data.get('vpn_text_edit_key'):
         if t == '❌ لغو':
             context.user_data.pop('vpn_text_edit_key', None)
@@ -3468,6 +3538,103 @@ async def text_router(update, context):
     if t == '🛠 پنل مدیریت' and is_admin(uid):
         return await update.message.reply_text('🛠 پنل مدیریت', reply_markup=admin_panel())
 
+    if t == '💰 ویرایش قیمت سرویس‌ها' and is_admin(uid):
+        cfg=load_config()
+        rates_default={'economic_per_gb':6000,'normal_per_gb':10000,'national_per_gb':300000,'pro_single_1m':100000,'pro_single_2m':200000,'pro_single_3m':300000,'pro_multi_1m':220000,'test_100mb':30000}
+        rates=dict(rates_default); rates.update(cfg.get('custom_volume_rates',{}) if isinstance(cfg.get('custom_volume_rates',{}),dict) else {})
+        leaves=[(('prices',)+path,value) for path,value in _vpn_price_leaves(cfg.get('prices',{})) if not (len(path)>=3 and path[-2:] == ('pro','price'))]
+        leaves += [(('custom_volume_rates',key),value) for key,value in rates.items() if isinstance(value,(int,float)) and not isinstance(value,bool)]
+        if not leaves:
+            return await update.message.reply_text('فعلاً قیمت عددی قابل ویرایش در تنظیمات پیدا نشد.', reply_markup=admin_panel())
+        labels=[]; mapping={}
+        friendly_rates={'economic_per_gb':'اقتصادی هر گیگ','normal_per_gb':'عادی هر گیگ','national_per_gb':'ویژه ملی هر گیگ','pro_single_1m':'پرو تک‌کاربر ۱ ماه','pro_single_2m':'پرو تک‌کاربر ۲ ماه','pro_single_3m':'پرو تک‌کاربر ۳ ماه','pro_multi_1m':'پرو چندکاربر ۱ ماه','test_100mb':'تست ۱۰۰ مگابایت'}
+        for i,(path,value) in enumerate(leaves):
+            # kb() uses each label as callback_data; keep labels short enough for Telegram's 64-byte limit.
+            if path and path[0]=='custom_volume_rates':
+                leaf=friendly_rates.get(str(path[-1]),str(path[-1]))
+            else:
+                leaf=' / '.join(str(x) for x in path[-2:]) if path else 'قیمت'
+            label=f'#{i+1} {leaf} — {int(value):,}'
+            labels.append(label); mapping[label]=list(path)
+        context.user_data['vpn_price_options']=mapping
+        context.user_data['vpn_price_select']=True
+        rows=[[x] for x in labels]
+        rows += [['❌ لغو'], ['🛠 پنل مدیریت']]
+        return await update.message.reply_text('💰 قیمت موردنظر را انتخاب کن:', reply_markup=kb(rows))
+
+    if t == '👛 درخواست‌های کیف پول' and is_admin(uid):
+        orders=load_orders(); pending=[]
+        for oid,o in orders.items():
+            if isinstance(o,dict) and o.get('type')=='wallet_topup' and o.get('status') in ('pending_wallet','pending_payment','wallet_pending') and o.get('receipt_photo'):
+                pending.append((str(oid),o))
+        pending.sort(key=lambda pair: str(pair[1].get('created_at','')), reverse=True)
+        if not pending:
+            return await update.message.reply_text('👛 درخواست معلقی برای شارژ کیف پول وجود ندارد.', reply_markup=admin_panel())
+        rows=[]
+        for oid,o in pending[:30]:
+            rows.append([f'#{oid} — {int(o.get("amount",0) or 0):,}'])
+        context.user_data['vpn_wallet_request_ids']={f'#{oid} — {int(o.get("amount",0) or 0):,}':oid for oid,o in pending[:30]}
+        context.user_data['vpn_wallet_request_select']=True
+        rows += [['🛠 پنل مدیریت']]
+        return await update.message.reply_text('👛 درخواست‌های کیف پول؛ درخواست را انتخاب کن تا رسید و دکمه‌های بررسی نمایش داده شوند:', reply_markup=kb(rows))
+
+    if t == '🌐 کانال‌ها و ربات‌های ما':
+        cfg=load_config()
+        return await update.message.reply_text(_vpn_links_text(cfg), disable_web_page_preview=True, reply_markup=kb([['🛠 پنل مدیریت']] if is_admin(uid) else [['🔙 خروج به صفحه اصلی']]))
+
+    if t == '🔐 چجوری بهتون اعتماد کنم؟':
+        cfg=load_config(); custom=(cfg.get('custom_texts',{}) or {}).get('trust','')
+        body=custom or '🔐 برای اطمینان قبل از پرداخت، مبلغ و مشخصات فاکتور را بررسی کن. رسید پرداخت به‌تنهایی به‌معنای تأیید نیست؛ سفارش پس از بررسی ثبت می‌شود. برای پرسش یا پیگیری از پشتیبانی داخل ربات استفاده کن.'
+        links=_vpn_links_text(cfg)
+        return await update.message.reply_text(body+'\n\n'+links, disable_web_page_preview=True, reply_markup=kb([['🎧 پشتیبانی'],['🌐 کانال‌ها و ربات‌های ما'],['🔙 خروج به صفحه اصلی']]), parse_mode='HTML' if '<tg-emoji' in body else None)
+
+    if is_admin(uid) and context.user_data.get('vpn_price_select'):
+        if t in ('❌ لغو','🛠 پنل مدیریت'):
+            context.user_data.pop('vpn_price_select',None); context.user_data.pop('vpn_price_options',None)
+            return await update.message.reply_text('🛠 پنل مدیریت',reply_markup=admin_panel())
+        path=(context.user_data.get('vpn_price_options') or {}).get(t)
+        if path:
+            context.user_data['vpn_price_path']=path; context.user_data.pop('vpn_price_select',None)
+            cfg=load_config()
+            rates_default={'economic_per_gb':6000,'normal_per_gb':10000,'national_per_gb':300000,'pro_single_1m':100000,'pro_single_2m':200000,'pro_single_3m':300000,'pro_multi_1m':220000,'test_100mb':30000}
+            if path and path[0]=='custom_volume_rates':
+                rates=dict(rates_default); rates.update(cfg.get('custom_volume_rates',{}) if isinstance(cfg.get('custom_volume_rates',{}),dict) else {}); cfg['custom_volume_rates']=rates
+            old=_vpn_get_path(cfg,path)
+            context.user_data['vpn_price_wait_value']=True
+            return await update.message.reply_text(f'✏️ مسیر قیمت: {_vpn_path_label(path)}\nقیمت فعلی: {money(old)}\nقیمت جدید را به تومان بفرست. برای لغو «❌ لغو» را بزن.',reply_markup=kb([['❌ لغو'],['🛠 پنل مدیریت']]))
+    if is_admin(uid) and context.user_data.get('vpn_price_wait_value'):
+        if t in ('❌ لغو','🛠 پنل مدیریت'):
+            for k in ('vpn_price_wait_value','vpn_price_path','vpn_price_options'): context.user_data.pop(k,None)
+            return await update.message.reply_text('ویرایش قیمت لغو شد.',reply_markup=admin_panel())
+        raw=t.replace(',','').replace('٬','').replace('،','').strip()
+        if not raw.isdigit() or int(raw)<=0:
+            return await update.message.reply_text('❌ قیمت باید عدد مثبت به تومان باشد. دوباره وارد کن:')
+        cfg=load_config(); path=context.user_data.get('vpn_price_path',[])
+        rates_default={'economic_per_gb':6000,'normal_per_gb':10000,'national_per_gb':300000,'pro_single_1m':100000,'pro_single_2m':200000,'pro_single_3m':300000,'pro_multi_1m':220000,'test_100mb':30000}
+        if path and path[0]=='custom_volume_rates':
+            rates=dict(rates_default); rates.update(cfg.get('custom_volume_rates',{}) if isinstance(cfg.get('custom_volume_rates',{}),dict) else {}); cfg['custom_volume_rates']=rates
+        try: _vpn_set_path(cfg,path,int(raw)); save_config(cfg)
+        except Exception as exc:
+            return await update.message.reply_text('❌ ذخیره قیمت انجام نشد؛ ساختار قیمت را بررسی کن.')
+        for k in ('vpn_price_wait_value','vpn_price_path','vpn_price_options'): context.user_data.pop(k,None)
+        return await update.message.reply_text(f'✅ قیمت «{_vpn_path_label(path)}» ذخیره شد: {money(int(raw))}',reply_markup=kb([['💰 ویرایش قیمت سرویس‌ها'],['🛠 پنل مدیریت']]))
+
+    if is_admin(uid) and context.user_data.get('vpn_wallet_request_select'):
+        if t == '🛠 پنل مدیریت':
+            context.user_data.pop('vpn_wallet_request_select',None); context.user_data.pop('vpn_wallet_request_ids',None)
+            return await update.message.reply_text('🛠 پنل مدیریت',reply_markup=admin_panel())
+        oid=(context.user_data.get('vpn_wallet_request_ids') or {}).get(t)
+        if oid:
+            o=load_orders().get(oid,{})
+            context.user_data.pop('vpn_wallet_request_select',None)
+            buttons=InlineKeyboardMarkup([[InlineKeyboardButton('✅ تأیید شارژ',callback_data=f'walletok:{oid}'),InlineKeyboardButton('❌ رد شارژ',callback_data=f'walletno:{oid}')]])
+            receipt=o.get('receipt_photo')
+            caption=f'👛 درخواست شارژ کیف پول\nشناسه: {oid}\nکاربر: {o.get("user_id","-")}\nمبلغ: {money(o.get("amount",0))}\nوضعیت: {o.get("status","-")}'
+            if receipt:
+                try: return await context.bot.send_photo(chat_id=uid,photo=receipt,caption=caption,reply_markup=buttons)
+                except Exception: pass
+            return await update.message.reply_text(caption+'\nرسید تصویری ذخیره‌شده‌ای برای این درخواست پیدا نشد.',reply_markup=buttons)
+
     if t == '🎨 ادیت رنگ دکمه‌ها' and is_admin(uid):
         context.user_data.pop('vpn_color_target', None)
         context.user_data['vpn_color_selecting_button'] = True
@@ -3476,13 +3643,13 @@ async def text_router(update, context):
           '📦 سرویس‌های تأیید شده','👥 سرویس مشتری‌ها','🚀 ارسال کانفیگ','📢 ارسال پیام به کانال',
           '⚙️ مدیریت VPN','✏️ ویرایش VPN','➕ افزودن VPN','🗑 حذف VPN','🌐 V2Ray','🟢 WireGuard',
           '🔵 OpenVPN','🔙 برگشت','🔙 خروج به صفحه اصلی','➕ شارژ کیف پول','🎁 دریافت جایزه',
-          '🎨 ادیت رنگ دکمه‌ها','📝 ویرایش متن‌ها','📚 راهنمای اتصال','📜 قوانین خرید']
+          '🎨 ادیت رنگ دکمه‌ها','📝 ویرایش متن‌ها','📚 راهنمای اتصال','📜 قوانین خرید','🌐 کانال‌ها و ربات‌های ما','🔐 چجوری بهتون اعتماد کنم؟','💰 ویرایش قیمت سرویس‌ها','👛 درخواست‌های کیف پول']
         return await update.message.reply_text('🎨 دکمه‌ای را که می‌خواهی رنگش تغییر کند انتخاب کن:',
             reply_markup=kb([[x] for x in dict.fromkeys(labels)] + [['❌ لغو']]))
     if t == '📝 ویرایش متن‌ها' and is_admin(uid):
         context.user_data['vpn_text_selecting'] = True
-        return await update.message.reply_text('📝 کدام متن را می‌خواهی تغییر بدهی؟',
-            reply_markup=kb([['👋 پیام خوش‌آمد'], ['🎧 متن پشتیبانی'], ['❌ لغو']]))
+        return await update.message.reply_text('📝 کدام متن یا لینک را می‌خواهی تغییر بدهی؟',
+            reply_markup=kb([['👋 پیام خوش‌آمد'], ['🎧 متن پشتیبانی'], ['🔐 متن اعتمادسازی'], ['📚 راهنمای اتصال'], ['📜 قوانین خرید'], ['🌐 لینک‌های کانال‌ها و ربات‌ها'], ['❌ لغو']]))
 
     if context.user_data.get('awaiting_invoice_confirmation'):
         return await update.message.reply_text('🧾 اول فاکتور را از طریق دکمه «تأیید فاکتور و ادامه» تأیید کن؛ بعد اطلاعات مشتری را می‌گیریم.')
@@ -3758,17 +3925,18 @@ async def text_router(update, context):
         if t == 'چند کاربر' and context.user_data.get('v2ray_tier') == 'pro':
             context.user_data['pro_user_mode'] = 'multi'
             context.user_data['pro_users'] = 'چند کاربر'
-            return await create_v2ray_order(update, context, 'نامحدود حجم — چند کاربر', 220000, '1 ماهه')
+            return await create_v2ray_order(update, context, 'نامحدود حجم — چند کاربر', v2ray_price_settings()['pro_multi_1m'], '1 ماهه')
         if t in ('1 ماهه', '2 ماهه', '3 ماهه') and context.user_data.get('v2ray_tier') == 'pro' and context.user_data.get('pro_user_mode') == 'single':
-            prices = {'1 ماهه': 100000, '2 ماهه': 200000, '3 ماهه': 300000}
+            rates=v2ray_price_settings()
+            prices = {'1 ماهه': rates['pro_single_1m'], '2 ماهه': rates['pro_single_2m'], '3 ماهه': rates['pro_single_3m']}
             return await create_v2ray_order(update, context, 'نامحدود حجم — تک کاربر', prices[t], t)
         if t == 'تست رایگان': return await v2ray_test_menu(update, context)
         if t == 'تست اقتصادی': return await handle_v2ray_test(update, context, 'economic')
         if t == 'تست عادی': return await handle_v2ray_test(update, context, 'normal')
         if t == 'تست پرو': return await handle_v2ray_test(update, context, 'pro')
-        if t in ('تست ویژه ملی — 30,000 تومان', '🇮🇷 تست ویژه ملی — 30,000 تومان'):
+        if t in (f'تست ویژه ملی — {money(v2ray_price_settings()["test_100mb"])}', f'🇮🇷 تست ویژه ملی — {money(v2ray_price_settings()["test_100mb"])}'):
             context.user_data['v2ray_tier'] = 'national'
-            return await create_v2ray_order(update, context, '0.1GB', 30000, '1 ماهه', final_price=True)
+            return await create_v2ray_order(update, context, '0.1GB', v2ray_price_settings()['test_100mb'], '1 ماهه', final_price=True)
         if t in ('1 ماهه','3 ماهه') and context.user_data.get('v2ray_tier'):
             context.user_data['v2ray_duration'] = t
             return await v2ray_volume_menu(update, context)
@@ -3785,7 +3953,8 @@ async def text_router(update, context):
                 gb = int(match.group(1))
                 button_price = int(match.group(2).replace(',', ''))
                 tier = context.user_data.get('v2ray_tier')
-                expected = gb * (6000 if tier == 'economic' else 10000)
+                rates=v2ray_price_settings()
+                expected = gb * (rates['economic_per_gb'] if tier == 'economic' else rates['normal_per_gb'])
                 if 5 <= gb <= 10 and button_price == expected:
                     return await create_v2ray_order(update, context, f'{gb}GB', expected, '1 ماهه', final_price=True)
         if context.user_data.get('v2ray_wait_custom'):
@@ -3796,15 +3965,16 @@ async def text_router(update, context):
             if gb < 5:
                 return await update.message.reply_text('❌ حداقل حجم ۵GB است.')
             tier = context.user_data.get('v2ray_tier')
-            if tier == 'economic': price = gb * 6000
-            elif tier == 'normal': price = gb * 10000
-            elif tier == 'national': price = gb * 300000
+            rates=v2ray_price_settings()
+            if tier == 'economic': price = gb * rates['economic_per_gb']
+            elif tier == 'normal': price = gb * rates['normal_per_gb']
+            elif tier == 'national': price = gb * rates['national_per_gb']
             else: return await update.message.reply_text('❌ نوع سرویس نامعتبر است.')
             return await create_v2ray_order(update, context, f'{gb}GB', price, '1 ماهه', final_price=True)
         if context.user_data.get('v2ray_duration') and t not in ('🔙 برگشت',):
             tier = context.user_data.get('v2ray_tier'); duration = context.user_data.get('v2ray_duration')
             data = v2ray_item().get(tier, {})
-            if duration == '1 ماهه' and tier == 'pro' and ('نامحدود' in t): return await create_v2ray_order(update, context, 'نامحدود', 220000, duration)
+            if duration == '1 ماهه' and tier == 'pro' and ('نامحدود' in t): return await create_v2ray_order(update, context, 'نامحدود', v2ray_price_settings()['pro_single_1m'], duration)
             for volume, price in data.get(duration, {}).items():
                 if t == f'{volume} — {shown_price(price)}': return await create_v2ray_order(update, context, volume, price, duration)
         if t == '🔙 برگشت':
@@ -4219,7 +4389,8 @@ async def callback(update, context):
                 context.user_data.pop('v2ray_duration', None)
                 return await q.edit_message_text('🌐 V2Ray\n\nنوع سرویس را انتخاب کن:', reply_markup=kb([['💚 اقتصادی-حجمی'], ['🔵 عادی-حجمی'], ['🇮🇷 ویژه ملی'], ['🟣 پرو- نامحدود حجم'], ['🧪 تست رایگان'], ['🔙 برگشت']]))
             context.user_data['v2ray_duration'] = '1 ماهه'
-            vals = ([gb * (6000 if tier == 'economic' else 10000) for gb in range(5, 11)] if tier in ('economic', 'normal') else None)
+            rates=v2ray_price_settings()
+            vals = ([gb * (rates['economic_per_gb'] if tier == 'economic' else rates['normal_per_gb']) for gb in range(5, 11)] if tier in ('economic', 'normal') else None)
             if vals:
                 rows = [[f'📦 {gb}GB — {money(price)}'] for gb, price in zip(range(5, 11), vals)]
                 rows.extend([['📦 حجم دلخواه (۵GB به بالا)'], ['🔙 برگشت']])
@@ -4509,10 +4680,16 @@ async def callback(update, context):
         oid=d.split(':',1)[1]; orders=load_orders(); o=orders.get(oid)
         if not o: return await q.answer('❌ پیدا نشد.',show_alert=True)
         if d.startswith('walletok:'):
+            if o.get('status') not in ('pending_wallet','pending_payment','wallet_pending'):
+                return await q.answer('این درخواست قبلاً بررسی شده یا در وضعیت قابل تأیید نیست.', show_alert=True)
+            if not o.get('receipt_photo'):
+                return await q.answer('هنوز رسید پرداختی برای این درخواست ثبت نشده است.', show_alert=True)
             add_wallet(int(o['user_id']),int(o['amount'])); o['status']='wallet_paid'; orders[oid]=o; save_orders(orders)
             await q.edit_message_caption(caption='✅ شارژ کیف پول تأیید شد.\n\n'+f'مبلغ: {money(o["amount"])}')
             await context.bot.send_message(int(o['user_id']),f'✅ شارژ کیف پول شما تأیید شد.\n\n💰 مبلغ: {money(o["amount"])}\n💵 موجودی جدید: {money(wallet_balance(int(o["user_id"]))) }')
         else:
+            if o.get('status') not in ('pending_wallet','pending_payment','wallet_pending'):
+                return await q.answer('این درخواست قبلاً بررسی شده یا در وضعیت قابل رد نیست.', show_alert=True)
             o['status']='wallet_rejected'; orders[oid]=o; save_orders(orders)
             try: await q.edit_message_caption(caption='❌ شارژ کیف پول رد شد.')
             except Exception: pass
