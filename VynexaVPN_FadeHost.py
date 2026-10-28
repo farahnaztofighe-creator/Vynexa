@@ -483,6 +483,12 @@ def kb(rows):
         for label in row:
             label = str(label)
             style = _button_style(label)
+            try:
+                custom_style = str(load_config().get('button_colors', {}).get(label, '')).strip()
+                if custom_style in {'default', 'primary', 'success', 'danger'}:
+                    style = None if custom_style == 'default' else custom_style
+            except Exception:
+                pass
             kwargs = {'callback_data': 'menu:' + label}
             if style:
                 kwargs['style'] = style
@@ -514,6 +520,7 @@ def admin_panel():
         ['👥 سرویس مشتری‌ها'],
         ['🚀 ارسال کانفیگ'],
         ['👥 زیرمجموعه‌گیری'],
+        ['🎨 ادیت رنگ دکمه‌ها', '📝 ویرایش متن‌ها'],
         ['📢 ارسال پیام به کانال'],
         ['🔙 خروج به صفحه اصلی'],
     ])
@@ -815,7 +822,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if arg == 'support':
         return await support(update, context)
 
-    await update.message.reply_text(WELCOME, reply_markup=home(uid))
+    cfg = load_config()
+    welcome_text = str(cfg.get('custom_texts', {}).get('welcome', '')).strip() or WELCOME
+    await update.message.reply_text(welcome_text, reply_markup=home(uid), parse_mode='HTML' if '<tg-emoji' in welcome_text else None)
 
 
 async def admin_cmd(update, context):
@@ -1547,9 +1556,11 @@ async def v2route_renew_service(o):
 
 
 async def support(update, context):
+    cfg = load_config()
+    support_text = str(cfg.get('custom_texts', {}).get('support', '')).strip()
     await update.message.reply_text(
-        f'🎧 پشتیبانی\n\nبرای ارتباط با پشتیبانی:\n{SUPPORT}',
-        reply_markup=home(update.effective_user.id)
+        support_text or f'🎧 پشتیبانی\n\nبرای ارتباط با پشتیبانی:\n{SUPPORT}',
+        reply_markup=home(update.effective_user.id), parse_mode='HTML' if '<tg-emoji' in support_text else None
     )
 
 
@@ -3505,6 +3516,67 @@ async def text_router(update, context):
 
     t = update.message.text.strip()
     uid = update.effective_user.id
+
+    if is_admin(uid) and context.user_data.get('vpn_color_selecting_button'):
+        if t in ('❌ لغو', '🔙 پنل مدیریت'):
+            context.user_data.pop('vpn_color_selecting_button', None)
+            context.user_data.pop('vpn_color_target', None)
+            return await update.message.reply_text('🛠 پنل مدیریت', reply_markup=admin_panel())
+        context.user_data.pop('vpn_color_selecting_button', None)
+        context.user_data['vpn_color_target'] = t
+        return await update.message.reply_text(f'🎨 رنگ جدید برای دکمهٔ «{t}» را انتخاب کن:',
+            reply_markup=kb([['⚪ پیش‌فرض'], ['🔵 آبی'], ['🟢 سبز'], ['🔴 قرمز'], ['❌ لغو']]))
+    if is_admin(uid) and context.user_data.get('vpn_color_target'):
+        color_map = {'⚪ پیش‌فرض':'default', '🔵 آبی':'primary', '🟢 سبز':'success', '🔴 قرمز':'danger'}
+        target = context.user_data.get('vpn_color_target')
+        if t in color_map:
+            cfg = load_config()
+            mapping = cfg.setdefault('button_colors', {})
+            if color_map[t] == 'default': mapping.pop(target, None)
+            else: mapping[target] = color_map[t]
+            save_config(cfg)
+            context.user_data.pop('vpn_color_target', None)
+            return await update.message.reply_text(f'✅ رنگ دکمهٔ «{target}» ذخیره شد.',
+                reply_markup=kb([['🎨 ادیت رنگ دکمه‌ها'], ['🛠 پنل مدیریت']]))
+        if t == '❌ لغو':
+            context.user_data.pop('vpn_color_target', None)
+            return await update.message.reply_text('تغییر رنگ لغو شد.', reply_markup=admin_panel())
+    if is_admin(uid) and context.user_data.get('vpn_text_selecting'):
+        if t in ('👋 پیام خوش‌آمد', '🎧 متن پشتیبانی'):
+            context.user_data.pop('vpn_text_selecting', None)
+            context.user_data['vpn_text_edit_key'] = 'welcome' if t == '👋 پیام خوش‌آمد' else 'support'
+            return await update.message.reply_text('متن جدید را بفرست. برای لغو «❌ لغو» را بزن.')
+        if t == '❌ لغو':
+            context.user_data.pop('vpn_text_selecting', None)
+            return await update.message.reply_text('ویرایش متن لغو شد.', reply_markup=admin_panel())
+    if is_admin(uid) and context.user_data.get('vpn_text_edit_key'):
+        if t == '❌ لغو':
+            context.user_data.pop('vpn_text_edit_key', None)
+            return await update.message.reply_text('ویرایش متن لغو شد.', reply_markup=admin_panel())
+        key = context.user_data.pop('vpn_text_edit_key')
+        cfg = load_config()
+        saved_text = getattr(update.message, 'text_html', None) or t
+        cfg.setdefault('custom_texts', {})[key] = saved_text[:8000]
+        save_config(cfg)
+        return await update.message.reply_text('✅ متن ذخیره شد.', reply_markup=kb([['📝 ویرایش متن‌ها'], ['🛠 پنل مدیریت']]))
+    if t == '🛠 پنل مدیریت' and is_admin(uid):
+        return await update.message.reply_text('🛠 پنل مدیریت', reply_markup=admin_panel())
+
+    if t == '🎨 ادیت رنگ دکمه‌ها' and is_admin(uid):
+        context.user_data.pop('vpn_color_target', None)
+        context.user_data['vpn_color_selecting_button'] = True
+        labels = ['🛒 خرید سرویس','🔄 تمدید سرویس','📦 سرویس‌های من','🎧 پشتیبانی','💰 کیف پول',
+          '🌐 پروکسی تلگرام','👥 زیرمجموعه‌گیری','🤖 سوالات هوش مصنوعی','📢 اطلاعیه','🤖 ربات روشن/خاموش',
+          '📦 سرویس‌های تأیید شده','👥 سرویس مشتری‌ها','🚀 ارسال کانفیگ','📢 ارسال پیام به کانال',
+          '⚙️ مدیریت VPN','✏️ ویرایش VPN','➕ افزودن VPN','🗑 حذف VPN','🌐 V2Ray','🟢 WireGuard',
+          '🔵 OpenVPN','🔙 برگشت','🔙 خروج به صفحه اصلی','➕ شارژ کیف پول','🎁 دریافت جایزه',
+          '🎨 ادیت رنگ دکمه‌ها','📝 ویرایش متن‌ها']
+        return await update.message.reply_text('🎨 دکمه‌ای را که می‌خواهی رنگش تغییر کند انتخاب کن:',
+            reply_markup=kb([[x] for x in dict.fromkeys(labels)] + [['❌ لغو']]))
+    if t == '📝 ویرایش متن‌ها' and is_admin(uid):
+        context.user_data['vpn_text_selecting'] = True
+        return await update.message.reply_text('📝 کدام متن را می‌خواهی تغییر بدهی؟',
+            reply_markup=kb([['👋 پیام خوش‌آمد'], ['🎧 متن پشتیبانی'], ['❌ لغو']]))
 
     if context.user_data.get('awaiting_invoice_confirmation'):
         return await update.message.reply_text('🧾 اول فاکتور را از طریق دکمه «تأیید فاکتور و ادامه» تأیید کن؛ بعد اطلاعات مشتری را می‌گیریم.')
