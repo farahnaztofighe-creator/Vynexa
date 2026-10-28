@@ -16,13 +16,6 @@ VYNEXA_REFERRAL_TEXT = """👥 زیرمجموعه‌گیری وینکسا 💙
 
 💙 هر دعوت، یک قدم نزدیک‌تر به جایزه!"""
 
-async def vynexa_webapp_data(update, context):
-    try:
-        data = json.loads(update.effective_message.web_app_data.data)
-        await update.effective_message.reply_text("✅ اتصال Mini App به ربات برقرار شد.")
-    except Exception:
-        await update.effective_message.reply_text("✅ Mini App متصل شد.")
-
 import json, re, asyncio, random, secrets, string
 from datetime import datetime, timedelta
 
@@ -476,15 +469,16 @@ def kb(rows):
         cfg = load_config()
         custom_ids = cfg.get('button_custom_emojis', {}) or {}
         text_emojis = cfg.get('button_custom_emoji_text', {}) or {}
+        button_colors = cfg.get('button_colors', {}) or {}
     except Exception:
-        custom_ids, text_emojis = {}, {}
+        custom_ids, text_emojis, button_colors = {}, {}, {}
     for row in rows:
         styled_row = []
         for label in row:
             label = str(label)
             style = _button_style(label)
             try:
-                custom_style = str(load_config().get('button_colors', {}).get(label, '')).strip()
+                custom_style = str(button_colors.get(label, '')).strip()
                 if custom_style in {'default', 'primary', 'success', 'danger'}:
                     style = None if custom_style == 'default' else custom_style
             except Exception:
@@ -502,13 +496,20 @@ def kb(rows):
                     shown_label = f'{text_emoji} {label}'
             except Exception:
                 pass
-            styled_row.append(InlineKeyboardButton(shown_label, **kwargs))
+            try:
+                styled_row.append(InlineKeyboardButton(shown_label, **kwargs))
+            except (TypeError, ValueError):
+                # Keep menus usable on older python-telegram-bot versions.
+                fallback = dict(kwargs)
+                fallback.pop('style', None)
+                fallback.pop('icon_custom_emoji_id', None)
+                styled_row.append(InlineKeyboardButton(shown_label, **fallback))
         keyboard.append(styled_row)
     return InlineKeyboardMarkup(keyboard)
 
 
 def home(uid):
-    rows = [['🛒 خرید سرویس', '🔄 تمدید سرویس'], ['📦 سرویس‌های من', '🎧 پشتیبانی'], ['💰 کیف پول'], ['🌐 پروکسی تلگرام'], ['👥 زیرمجموعه‌گیری'], ['🤖 سوالات هوش مصنوعی']]
+    rows = [['🛒 خرید سرویس', '🔄 تمدید سرویس'], ['📦 سرویس‌های من', '🎧 پشتیبانی'], ['💰 کیف پول'], ['🌐 پروکسی تلگرام'], ['👥 زیرمجموعه‌گیری'], ['🤖 سوالات هوش مصنوعی'], ['📚 راهنمای اتصال', '📜 قوانین خرید']]
     if is_admin(uid):
         rows += [['📢 اطلاعیه', '🤖 ربات روشن/خاموش']]
     return kb(rows)
@@ -1146,84 +1147,6 @@ async def services(update, context):
 
 
 # ===== LIVE V2ROUTE SERVICE INFO =====
-async def v2route_live_info(o):
-    """دریافت حجم مصرفی و تاریخ انقضا از لینک Subscription"""
-    import httpx
-
-    url = o.get('subscription_url')
-
-    # اگر subscription_url ذخیره نشده بود، از delivery پیدا کن
-    if not url:
-        for x in o.get('delivery', []):
-            if not isinstance(x, dict):
-                continue
-            if x.get('type') == 'text':
-                value = str(x.get('value', '')).strip()
-                if value.startswith(('http://', 'https://')):
-                    url = value
-                    break
-
-    if not url:
-        return None, 'لینک اشتراک این سرویس پیدا نشد.'
-
-    try:
-        # Live statistics are optional: keep DNS/network failures from making
-        # the bot feel frozen. Short connect/read timeouts keep callbacks snappy.
-        timeout = httpx.Timeout(4.0, connect=1.5, read=3.0, write=2.0, pool=1.0)
-        async with httpx.AsyncClient(
-            timeout=timeout,
-            follow_redirects=True,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        ) as client:
-            r = await client.get(url)
-
-        if not r.is_success:
-            return None, f'خطای دریافت اشتراک: HTTP {r.status_code}'
-
-        info = (
-            r.headers.get('subscription-userinfo')
-            or r.headers.get('Subscription-Userinfo')
-        )
-
-        if not info:
-            return None, 'اطلاعات مصرف زنده در پاسخ اشتراک وجود ندارد.'
-
-        vals = {}
-
-        for part in info.split(';'):
-            if '=' in part:
-                k, v = part.strip().split('=', 1)
-                vals[k.strip().lower()] = v.strip()
-
-        def to_int(x):
-            try:
-                return int(float(x))
-            except:
-                return 0
-
-        total = to_int(vals.get('total', 0))
-        upload = to_int(vals.get('upload', 0))
-        download = to_int(vals.get('download', 0))
-
-        used = upload + download
-        remaining = max(0, total - used)
-
-        expire = to_int(vals.get('expire', 0))
-
-        return {
-            'total': total,
-            'upload': upload,
-            'download': download,
-            'used': used,
-            'remaining': remaining,
-            'expire': expire
-        }, None
-
-    except Exception as e:
-        print('LIVE V2ROUTE ERROR:', repr(e))
-        return None, 'خطا در دریافت اطلاعات زنده: ' + str(e)
-
-
 def bytes_to_gb(value):
     try:
         return float(value) / (1024 ** 3)
@@ -2351,12 +2274,14 @@ async def v2route_live_info(o):
         return None, "لینک اشتراک برای بررسی زنده پیدا نشد."
 
     try:
+        timeout = httpx.Timeout(4.0, connect=1.5, read=3.0, write=2.0, pool=1.0)
         async with httpx.AsyncClient(
-            timeout=20,
-            follow_redirects=True
+            timeout=timeout,
+            follow_redirects=True,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
         ) as client:
-
             r = await client.get(url)
+            r.raise_for_status()
 
         header = (
             r.headers.get("subscription-userinfo")
@@ -2428,35 +2353,6 @@ def live_info_text(o, info):
 
 
 # ===== VYNEXA QR =====
-
-async def send_vynexa_qr(context, uid, url):
-    if not url:
-        return False
-    import qrcode, tempfile, os
-    path = None
-    try:
-        img = qrcode.make(str(url))
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            path = f.name
-        img.save(path)
-        with open(path, "rb") as photo:
-            await context.bot.send_photo(
-                chat_id=uid, photo=photo,
-                caption="🔳 QR کد لینک اتصال | @VynexaVPN_bot"
-            )
-        return True
-    except Exception as e:
-        print("QR ERROR:", repr(e))
-        return False
-    finally:
-        if path:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-
-
-
 
 # ===== V2ROUTE API =====
 V2ROUTE_TOKEN = os.environ.get('V2ROUTE_TOKEN', '').strip()
@@ -3517,6 +3413,16 @@ async def text_router(update, context):
     t = update.message.text.strip()
     uid = update.effective_user.id
 
+    if not bot_enabled() and not is_admin(uid):
+        return await update.message.reply_text('🔴 ربات فعلاً خاموش است. لطفاً بعداً دوباره مراجعه کن.')
+
+    if t == '📚 راهنمای اتصال':
+        guide = ('📚 راهنمای اتصال VynexaVPN\n\n۱. از «🛒 خرید سرویس» سرویس موردنظرت را انتخاب کن.\n۲. بعد از تأیید پرداخت، کانفیگ یا لینک اتصال را از ربات دریافت کن.\n۳. برنامهٔ سازگار با نوع سرویس را نصب کن و لینک/کانفیگ را داخل آن وارد کن.\n۴. اگر وصل نشدی، ابتدا اینترنت و تاریخ/ساعت دستگاه را بررسی کن؛ سپس از «🎧 پشتیبانی» کمک بگیر.\n\n⚠️ نام برنامه و مراحل دقیق ممکن است بسته به نوع سرویس متفاوت باشد.')
+        return await update.message.reply_text(guide, reply_markup=kb([['🛒 خرید سرویس'], ['🎧 پشتیبانی'], ['🔙 خروج به صفحه اصلی']]))
+    if t == '📜 قوانین خرید':
+        rules = ('📜 قوانین خرید سرویس\n\n• قبل از پرداخت، نوع سرویس، حجم، مدت و مبلغ فاکتور را بررسی کن.\n• سفارش پس از ثبت رسید باید توسط مدیر بررسی شود؛ ارسال رسید به‌تنهایی به‌معنای تأیید پرداخت نیست.\n• کانفیگ و اطلاعات ورود را در اختیار افراد ناشناس قرار نده.\n• تمدید را پیش از پایان اعتبار انجام بده؛ شرایط تمدید به سرویس انتخابی بستگی دارد.\n• در صورت مغایرت مبلغ یا بروز مشکل، قبل از پرداخت دوباره با پشتیبانی تماس بگیر.')
+        return await update.message.reply_text(rules, reply_markup=kb([['🎧 پشتیبانی'], ['🛒 خرید سرویس'], ['🔙 خروج به صفحه اصلی']]))
+
     if is_admin(uid) and context.user_data.get('vpn_color_selecting_button'):
         if t in ('❌ لغو', '🔙 پنل مدیریت'):
             context.user_data.pop('vpn_color_selecting_button', None)
@@ -3570,7 +3476,7 @@ async def text_router(update, context):
           '📦 سرویس‌های تأیید شده','👥 سرویس مشتری‌ها','🚀 ارسال کانفیگ','📢 ارسال پیام به کانال',
           '⚙️ مدیریت VPN','✏️ ویرایش VPN','➕ افزودن VPN','🗑 حذف VPN','🌐 V2Ray','🟢 WireGuard',
           '🔵 OpenVPN','🔙 برگشت','🔙 خروج به صفحه اصلی','➕ شارژ کیف پول','🎁 دریافت جایزه',
-          '🎨 ادیت رنگ دکمه‌ها','📝 ویرایش متن‌ها']
+          '🎨 ادیت رنگ دکمه‌ها','📝 ویرایش متن‌ها','📚 راهنمای اتصال','📜 قوانین خرید']
         return await update.message.reply_text('🎨 دکمه‌ای را که می‌خواهی رنگش تغییر کند انتخاب کن:',
             reply_markup=kb([[x] for x in dict.fromkeys(labels)] + [['❌ لغو']]))
     if t == '📝 ویرایش متن‌ها' and is_admin(uid):
@@ -4708,9 +4614,9 @@ async def _expiry_monitor_loop(application):
 # VYNEXA_TOGGLE_BROADCAST
 async def _vynexa_broadcast_toggle(bot, enabled):
     if enabled:
-        message = "🎉 خبر خوب، دوست عزیز!\\nربات VynexaVPN دوباره فعاله 💙\\nمی‌تونی از امکاناتش استفاده کنی 🙂"
+        message = "🎉 خبر خوب، دوست عزیز!\nربات VynexaVPN دوباره فعاله 💙\nمی‌تونی از امکاناتش استفاده کنی 🙂"
     else:
-        message = "🔴 دوست عزیز VynexaVPN، ربات موقتاً خاموش شده است.\\nبه‌محض فعال‌شدن دوباره بهت اطلاع می‌دیم 💙"
+        message = "🔴 دوست عزیز VynexaVPN، ربات موقتاً خاموش شده است.\nبه‌محض فعال‌شدن دوباره بهت اطلاع می‌دیم 💙"
     users = load_users()
     ids = list(users.keys()) if isinstance(users, dict) else list(users) if isinstance(users, list) else []
     sent = 0
@@ -4989,61 +4895,6 @@ def main():
 
     print('Vynexa-VPN V22 RECONNECT FIX started')
 
-
-    # VYNEXA_AUTO_QR_CLASS_PATCH
-    import re as _qr_re
-    import io as _qr_io
-    import struct as _qr_struct
-    import zlib as _qr_zlib
-    import qrcode as _qr_lib
-
-    _qr_bot_class = type(app.bot)
-    _qr_original_send_message = _qr_bot_class.send_message
-
-    async def _qr_send_message_and_image(self, *args, **kwargs):
-        result = await _qr_original_send_message(self, *args, **kwargs)
-        try:
-            _chat_id = kwargs.get("chat_id", args[0] if args else None)
-            _text = kwargs.get("text", args[1] if len(args) > 1 else "")
-            _match = _qr_re.search(r"(?i)https?://[^\s<>]+", str(_text or ""))
-            if _chat_id is not None and _match:
-                _url = _match.group(0).rstrip(".,!?;:)]}»")
-                _qr = _qr_lib.QRCode(
-                    error_correction=_qr_lib.constants.ERROR_CORRECT_M,
-                    box_size=1, border=4
-                )
-                _qr.add_data(_url)
-                _qr.make(fit=True)
-                _matrix = _qr.get_matrix()
-                _scale = max(4, min(10, 900 // len(_matrix)))
-                _width = len(_matrix) * _scale
-                _raw = bytearray()
-                for _row in _matrix:
-                    _line = bytearray([0])
-                    for _cell in _row:
-                        _v = 0 if _cell else 255
-                        _line.extend(bytes((_v, _v, _v)) * _scale)
-                    for _ in range(_scale):
-                        _raw.extend(_line)
-
-                def _qr_chunk(_kind, _data):
-                    return (_qr_struct.pack(">I", len(_data)) + _kind + _data +
-                            _qr_struct.pack(">I", _qr_zlib.crc32(_kind + _data) & 0xffffffff))
-
-                _png = (b"\x89PNG\r\n\x1a\n" +
-                        _qr_chunk(b"IHDR", _qr_struct.pack(">IIBBBBB", _width, _width, 8, 2, 0, 0, 0)) +
-                        _qr_chunk(b"IDAT", _qr_zlib.compress(bytes(_raw))) +
-                        _qr_chunk(b"IEND", b""))
-                await self.send_photo(
-                    chat_id=_chat_id,
-                    photo=_qr_io.BytesIO(_png),
-                    caption="💙 QR لینک سرویس شما\n" + _url[:900]
-                )
-        except Exception as _qr_error:
-            print("AUTO QR ERROR:", str(_qr_error)[:250])
-        return result
-
-    _qr_bot_class.send_message = _qr_send_message_and_image
 
     app.run_polling(poll_interval=0.0, timeout=10, bootstrap_retries=-1, drop_pending_updates=False, allowed_updates=Update.ALL_TYPES)
 
