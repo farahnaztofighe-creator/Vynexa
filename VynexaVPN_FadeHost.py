@@ -3515,15 +3515,24 @@ async def text_router(update, context):
         if t in ('❌ لغو', '🛠 پنل مدیریت'):
             context.user_data.pop('vpn_links_editing',None)
             return await update.message.reply_text('ویرایش لینک‌ها لغو شد.',reply_markup=admin_panel())
-        links=[]
-        for line in t.splitlines():
-            parts=line.split('|',1)
-            if len(parts)==2 and parts[0].strip() and parts[1].strip().startswith(('https://','http://','tg://')):
-                links.append({'title':parts[0].strip()[:80],'url':parts[1].strip()})
-        if not links:
-            return await update.message.reply_text('❌ قالب درست نیست. هر خط باید «عنوان|لینک» باشد.')
-        cfg=load_config(); cfg['other_links']=links; save_config(cfg); context.user_data.pop('vpn_links_editing',None)
-        return await update.message.reply_text(f'✅ {len(links)} لینک ذخیره شد.',reply_markup=admin_panel())
+        # A pending link-editor state must never swallow normal bot buttons or commands.
+        # Telegram reply-keyboard buttons arrive as plain text, just like user input.
+        is_command = t.startswith('/')
+        is_emoji_button = bool(t) and __import__('unicodedata').category(t[0]) in ('So', 'Sk')
+        if '|' not in t and (is_command or is_emoji_button):
+            context.user_data.pop('vpn_links_editing', None)
+            # Fall through so /start, buy-service, admin and other buttons work normally.
+        else:
+            links=[]
+            for line in t.splitlines():
+                parts=line.split('|',1)
+                if len(parts)==2 and parts[0].strip() and parts[1].strip().startswith(('https://','http://','tg://')):
+                    links.append({'title':parts[0].strip()[:80],'url':parts[1].strip()})
+            if not links:
+                return await update.message.reply_text('❌ قالب درست نیست. هر خط باید «عنوان|لینک» باشد.')
+            cfg=load_config(); cfg['other_links']=links; save_config(cfg); context.user_data.pop('vpn_links_editing',None)
+            return await update.message.reply_text(f'✅ {len(links)} لینک ذخیره شد.',reply_markup=admin_panel())
+
 
     if is_admin(uid) and context.user_data.get('vpn_text_edit_key'):
         if t == '❌ لغو':
