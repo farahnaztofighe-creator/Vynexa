@@ -3512,7 +3512,7 @@ async def text_router(update, context):
             context.user_data.pop('vpn_text_selecting', None)
             return await update.message.reply_text('ویرایش متن لغو شد.', reply_markup=admin_panel())
     if is_admin(uid) and context.user_data.get('vpn_links_editing'):
-        if t=='❌ لغو':
+        if t in ('❌ لغو', '🛠 پنل مدیریت'):
             context.user_data.pop('vpn_links_editing',None)
             return await update.message.reply_text('ویرایش لینک‌ها لغو شد.',reply_markup=admin_panel())
         links=[]
@@ -3551,9 +3551,9 @@ async def text_router(update, context):
         for i,(path,value) in enumerate(leaves):
             # kb() uses each label as callback_data; keep labels short enough for Telegram's 64-byte limit.
             if path and path[0]=='custom_volume_rates':
-                leaf=friendly_rates.get(str(path[-1]),str(path[-1]))
+                leaf='قیمت فعال: '+friendly_rates.get(str(path[-1]),str(path[-1]))
             else:
-                leaf=' / '.join(str(x) for x in path[-2:]) if path else 'قیمت'
+                leaf='پلن ذخیره‌شده: '+' / '.join(str(x) for x in path[-2:]) if path else 'قیمت'
             label=f'#{i+1} {leaf} — {int(value):,}'
             labels.append(label); mapping[label]=list(path)
         context.user_data['vpn_price_options']=mapping
@@ -3578,9 +3578,21 @@ async def text_router(update, context):
         rows += [['🛠 پنل مدیریت']]
         return await update.message.reply_text('👛 درخواست‌های کیف پول؛ درخواست را انتخاب کن تا رسید و دکمه‌های بررسی نمایش داده شوند:', reply_markup=kb(rows))
 
+    if t == '🌐 کانال‌ها و ربات‌های ما' and is_admin(uid):
+        # In the admin panel, this button must open link management rather than
+        # showing the public list and leaving the admin without an add/edit action.
+        context.user_data['vpn_links_editing'] = True
+        return await update.message.reply_text(
+            '🌐 مدیریت کانال‌ها و ربات‌های ما\n\n'
+            'لینک‌ها را هرکدام در یک خط بفرست؛ قالب هر خط:\n'
+            'عنوان|https://t.me/example\n\n'
+            'مثال:\nکانال اصلی|https://t.me/VynexaVPN\nربات اصلی|https://t.me/VynexaVPN_bot\n\n'
+            'ارسال این فهرست، لینک‌های قبلی را جایگزین می‌کند. برای لغو «❌ لغو» را بزن.',
+            reply_markup=kb([['❌ لغو'], ['🛠 پنل مدیریت']])
+        )
     if t == '🌐 کانال‌ها و ربات‌های ما':
         cfg=load_config()
-        return await update.message.reply_text(_vpn_links_text(cfg), disable_web_page_preview=True, reply_markup=kb([['🛠 پنل مدیریت']] if is_admin(uid) else [['🔙 خروج به صفحه اصلی']]))
+        return await update.message.reply_text(_vpn_links_text(cfg), disable_web_page_preview=True, reply_markup=kb([['🔙 خروج به صفحه اصلی']]))
 
     if t == '🔐 چجوری بهتون اعتماد کنم؟':
         cfg=load_config(); custom=(cfg.get('custom_texts',{}) or {}).get('trust','')
@@ -3613,11 +3625,26 @@ async def text_router(update, context):
         rates_default={'economic_per_gb':6000,'normal_per_gb':10000,'national_per_gb':300000,'pro_single_1m':100000,'pro_single_2m':200000,'pro_single_3m':300000,'pro_multi_1m':220000,'test_100mb':30000}
         if path and path[0]=='custom_volume_rates':
             rates=dict(rates_default); rates.update(cfg.get('custom_volume_rates',{}) if isinstance(cfg.get('custom_volume_rates',{}),dict) else {}); cfg['custom_volume_rates']=rates
-        try: _vpn_set_path(cfg,path,int(raw)); save_config(cfg)
+        try:
+            _vpn_set_path(cfg,path,int(raw))
+            # Runtime V2Ray pricing reads these dedicated rates; keep the legacy
+            # price table in sync where the same product is represented there.
+            if path and path[0] == 'custom_volume_rates':
+                key = str(path[-1])
+                v2 = cfg.setdefault('prices', {}).get('V2Ray', {})
+                if isinstance(v2, dict) and key == 'pro_single_1m' and isinstance(v2.get('pro'), dict):
+                    v2['pro']['price'] = int(raw)
+            save_config(cfg)
+            check_cfg = load_config()
+            saved_value = _vpn_get_path(check_cfg, path)
+            if int(saved_value) != int(raw):
+                raise ValueError('price read-back mismatch')
         except Exception as exc:
-            return await update.message.reply_text('❌ ذخیره قیمت انجام نشد؛ ساختار قیمت را بررسی کن.')
+            print('VPN PRICE SAVE ERROR:', repr(exc)[:200])
+            return await update.message.reply_text('❌ قیمت ذخیره نشد یا بعد از ذخیره قابل‌خواندن نبود. مسیر فایل تنظیمات و دسترسی نوشتن هاست را بررسی کن.')
         for k in ('vpn_price_wait_value','vpn_price_path','vpn_price_options'): context.user_data.pop(k,None)
-        return await update.message.reply_text(f'✅ قیمت «{_vpn_path_label(path)}» ذخیره شد: {money(int(raw))}',reply_markup=kb([['💰 ویرایش قیمت سرویس‌ها'],['🛠 پنل مدیریت']]))
+        # Report the effective price source so the admin can see the exact key changed.
+        return await update.message.reply_text(f'✅ قیمت ذخیره و دوباره بررسی شد.\n\nمسیر تنظیمات: {_vpn_path_label(path)}\nمبلغ جدید: {money(int(raw))}',reply_markup=kb([['💰 ویرایش قیمت سرویس‌ها'],['🛠 پنل مدیریت']]))
 
     if is_admin(uid) and context.user_data.get('vpn_wallet_request_select'):
         if t == '🛠 پنل مدیریت':
