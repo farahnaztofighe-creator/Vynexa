@@ -3556,14 +3556,23 @@ async def text_router(update, context):
         if not leaves:
             return await update.message.reply_text('فعلاً قیمت عددی قابل ویرایش در تنظیمات پیدا نشد.', reply_markup=admin_panel())
         labels=[]; mapping={}
-        friendly_rates={'economic_per_gb':'اقتصادی هر گیگ','normal_per_gb':'عادی هر گیگ','national_per_gb':'ویژه ملی هر گیگ','pro_single_1m':'پرو تک‌کاربر ۱ ماه','pro_single_2m':'پرو تک‌کاربر ۲ ماه','pro_single_3m':'پرو تک‌کاربر ۳ ماه','pro_multi_1m':'پرو چندکاربر ۱ ماه','test_100mb':'تست ۱۰۰ مگابایت'}
+        friendly_rates={'economic_per_gb':'اقتصادی/گیگ','normal_per_gb':'عادی/گیگ','national_per_gb':'ویژه ملی/گیگ','pro_single_1m':'پرو تک‌کاربر ۱م','pro_single_2m':'پرو تک‌کاربر ۲م','pro_single_3m':'پرو تک‌کاربر ۳م','pro_multi_1m':'پرو چندکاربر ۱م','test_100mb':'تست ۱۰۰مگ'}
         for i,(path,value) in enumerate(leaves):
-            # kb() uses each label as callback_data; keep labels short enough for Telegram's 64-byte limit.
+            # Telegram callback_data is limited to 64 UTF-8 bytes. kb() adds "menu:".
             if path and path[0]=='custom_volume_rates':
-                leaf='قیمت فعال: '+friendly_rates.get(str(path[-1]),str(path[-1]))
+                leaf=friendly_rates.get(str(path[-1]),str(path[-1]))
             else:
-                leaf='پلن ذخیره‌شده: '+' / '.join(str(x) for x in path[-2:]) if path else 'قیمت'
-            label=f'#{i+1} {leaf} — {int(value):,}'
+                leaf=str(path[-1]) if path else 'قیمت'
+            label=f'#{i+1} {leaf} {int(value)}'
+            encoded=label.encode('utf-8')
+            if len(encoded)>59:
+                encoded=encoded[:56]
+                while True:
+                    try:
+                        label=encoded.decode('utf-8')+'…'
+                        break
+                    except UnicodeDecodeError:
+                        encoded=encoded[:-1]
             labels.append(label); mapping[label]=list(path)
         context.user_data['vpn_price_options']=mapping
         context.user_data['vpn_price_select']=True
