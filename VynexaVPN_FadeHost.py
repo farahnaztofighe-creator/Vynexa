@@ -780,10 +780,32 @@ async def force_join_gate(update, context):
     raise ApplicationHandlerStop
 
 
+async def _challenge_signal_start(uid):
+    # Reports a successful /start to the integrated Vynexa Stars contest API.
+    endpoint = os.environ.get('CHALLENGE_API_URL', '').strip().rstrip('/')
+    secret = os.environ.get('CHALLENGE_SHARED_SECRET', '').strip()
+    if not endpoint or not secret:
+        return
+    def _send():
+        import urllib.request
+        payload = json.dumps({'uid': int(uid), 'bot': 'vpn'}).encode('utf-8')
+        req = urllib.request.Request(
+            endpoint + '/started', data=payload,
+            headers={'Content-Type': 'application/json', 'X-Vynexa-Secret': secret},
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=4) as response:
+            return response.status
+    try:
+        await asyncio.to_thread(_send)
+    except Exception as exc:
+        print('CHALLENGE START SIGNAL ERROR:', repr(exc)[:180])
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     remember_user(uid)
-
+    # CHALLENGE_START_SIGNAL_V1: report that this account has started VynexaVPN.
+    await _challenge_signal_start(uid)
     # Remove the old bottom ReplyKeyboard that Telegram may have cached from
     # an earlier version. Inline buttons are unaffected.
     try:
