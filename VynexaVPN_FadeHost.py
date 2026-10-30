@@ -16,7 +16,7 @@ VYNEXA_REFERRAL_TEXT = """👥 زیرمجموعه‌گیری وینکسا 💙
 
 💙 هر دعوت، یک قدم نزدیک‌تر به جایزه!"""
 
-import json, re, asyncio, random, secrets, string
+import json, re, asyncio, random, secrets, string, hashlib
 from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
@@ -783,9 +783,11 @@ async def force_join_gate(update, context):
 async def _challenge_signal_start(uid):
     # Reports a successful /start to the integrated Vynexa Stars contest API.
     endpoint = os.environ.get('CHALLENGE_API_URL', '').strip().rstrip('/')
-    secret = os.environ.get('CHALLENGE_SHARED_SECRET', '').strip()
+    secret = ''.join(os.environ.get('CHALLENGE_SHARED_SECRET', '').split())
     if not endpoint or not secret:
+        print('CHALLENGE START SIGNAL SKIPPED: endpoint_or_secret_missing')
         return
+    fingerprint = hashlib.sha256(secret.encode('utf-8')).hexdigest()[:10]
     def _send():
         import urllib.request
         payload = json.dumps({'uid': int(uid), 'bot': 'vpn'}).encode('utf-8')
@@ -794,16 +796,21 @@ async def _challenge_signal_start(uid):
             headers={'Content-Type': 'application/json', 'X-Vynexa-Secret': secret},
             method='POST'
         )
-        with urllib.request.urlopen(req, timeout=4) as response:
+        with urllib.request.urlopen(req, timeout=6) as response:
             return response.status
     try:
-        await asyncio.to_thread(_send)
+        status = await asyncio.to_thread(_send)
+        print(f'CHALLENGE START SIGNAL OK: HTTP {status} endpoint={endpoint} secret_fp={fingerprint}')
     except Exception as exc:
-        print('CHALLENGE START SIGNAL ERROR:', repr(exc)[:180])
+        code = getattr(exc, 'code', None)
+        print(f'CHALLENGE START SIGNAL ERROR: HTTP {code or "unknown"} endpoint={endpoint} secret_fp={fingerprint} detail={type(exc).__name__}')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     remember_user(uid)
+    users = load_users()
+    users.setdefault(str(uid), {'user_id': uid, 'wallet': 0})['bot_started'] = True
+    save_users(users)
     # CHALLENGE_START_SIGNAL_V1: report that this account has started VynexaVPN.
     await _challenge_signal_start(uid)
     # Remove the old bottom ReplyKeyboard that Telegram may have cached from
@@ -2873,6 +2880,12 @@ async def vynexa_channel_member_update(update, context):
 
         user = change.new_chat_member.user
         if user.is_bot:
+            return
+        # Telegram forbids bots from opening private chats. Only message users
+        # who have explicitly started this bot before.
+        user_record = load_users().get(str(user.id), {})
+        if not user_record.get('bot_started'):
+            print(f'CHANNEL LEAVE NOTICE SKIPPED: user={user.id} has_not_started_bot')
             return
 
         message = (
