@@ -782,7 +782,6 @@ async def force_join_gate(update, context):
 
 async def _challenge_signal_start(uid):
     # Reports a successful /start to the integrated Vynexa Stars contest API.
-    import urllib.error
     endpoint = os.environ.get('CHALLENGE_API_URL', '').strip().rstrip('/')
     secret = ''.join(os.environ.get('CHALLENGE_SHARED_SECRET', '').split())
     if not endpoint or not secret:
@@ -794,7 +793,11 @@ async def _challenge_signal_start(uid):
         payload = json.dumps({'uid': int(uid), 'bot': 'vpn'}).encode('utf-8')
         req = urllib.request.Request(
             endpoint + '/started', data=payload,
-            headers={'Content-Type': 'application/json', 'X-Vynexa-Secret': secret},
+            headers={
+                'Content-Type': 'application/json',
+                'X-Vynexa-Secret': secret,
+                'User-Agent': 'VynexaVPN/1.0',
+            },
             method='POST'
         )
         with urllib.request.urlopen(req, timeout=6) as response:
@@ -804,18 +807,7 @@ async def _challenge_signal_start(uid):
         print(f'CHALLENGE START SIGNAL OK: HTTP {status} endpoint={endpoint} secret_fp={fingerprint}')
     except Exception as exc:
         code = getattr(exc, 'code', None)
-        response_body = ''
-        if isinstance(exc, urllib.error.HTTPError):
-            try:
-                response_body = exc.read(512).decode('utf-8', 'replace')
-            except Exception:
-                response_body = ''
-        response_body = ' '.join(response_body.split())[:300]
-        print(
-            f'CHALLENGE START SIGNAL ERROR: HTTP {code or "unknown"} '
-            f'endpoint={endpoint} secret_fp={fingerprint} '
-            f'detail={type(exc).__name__} response={response_body or "-"}'
-        )
+        print(f'CHALLENGE START SIGNAL ERROR: HTTP {code or "unknown"} endpoint={endpoint} secret_fp={fingerprint} detail={type(exc).__name__}')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
